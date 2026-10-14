@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grove</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <header id="panelbar" role="tablist" aria-label="Panels"></header>
+  <div id="crumbbar" hidden></div>
+  <div id="toolbar"></div>
+  <div id="searchbar" hidden></div>
+  <div id="selbar" hidden></div>
+  <main id="tree" role="tree" tabindex="0"></main>
+  <div id="peek" role="tree" aria-label="Panel preview while dragging" hidden></div>
+  <div id="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize note" title="Drag to resize the note" tabindex="0" hidden></div>
+  <section id="note" aria-label="Note" hidden></section>
+  <div id="menu" hidden></div>
+  <script src="../content/keys.js"></script>
+  <script type="module" src="sidebar.js"></script>
+</body>
+</html>

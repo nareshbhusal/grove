@@ -1,0 +1,83 @@
+{
+  "manifest_version": 2,
+  "name": "Grove",
+  "version": "0.10.0",
+  "description": "Tree-style tabs, switchable panels, per-domain containers and tab folders. Modular and extensible.",
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "grove@local",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "tabs",
+    "tabHide",
+    "sessions",
+    "storage",
+    "contextualIdentities",
+    "cookies",
+    "downloads",
+    "search",
+    "webRequest",
+    "webRequestBlocking",
+    "webNavigation",
+    "unlimitedStorage",
+    "<all_urls>"
+  ],
+  "background": {
+    "page": "src/background.html",
+    "persistent": true
+  },
+  "sidebar_action": {
+    "default_title": "Grove",
+    "default_panel": "src/sidebar/sidebar.html",
+    "default_icon": "icons/icon.svg",
+    "open_at_install": true
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/keys.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "panel-next": {
+      "suggested_key": {
+        "default": "Alt+Shift+Period"
+      },
+      "description": "Next panel"
+    },
+    "panel-prev": {
+      "suggested_key": {
+        "default": "Alt+Shift+Comma"
+      },
+      "description": "Previous panel"
+    },
+    "outdent-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+Left"
+      },
+      "description": "Move the current tab out one level (from child to sibling of its parent)"
+    },
+    "_execute_sidebar_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+G"
+      }
+    }
+  }
+}

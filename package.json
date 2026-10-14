@@ -1,0 +1,16 @@
+{
+  "name": "grove",
+  "version": "0.10.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build": "web-ext build --source-dir . --overwrite-dest --ignore-files test package.json package-lock.json README.md scripts dist .gitignore node_modules web-ext-artifacts",
+    "run": "web-ext run --source-dir .",
+    "sign": "web-ext sign --source-dir . --channel=unlisted --ignore-files test package.json package-lock.json README.md scripts dist .gitignore node_modules web-ext-artifacts",
+    "xpi": "python3 scripts/make-xpi.py"
+  },
+  "devDependencies": {
+    "web-ext": "^10.7.0"
+  }
+}

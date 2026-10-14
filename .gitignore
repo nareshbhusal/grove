@@ -1,0 +1,24 @@
+# dependencies and build output
+node_modules/
+dist/
+web-ext-artifacts/
+*.xpi
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+
+# editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# local secrets (signing credentials) and logs
+.env
+.env.*
+*.log
+npm-debug.log*
