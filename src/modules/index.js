@@ -17,5 +17,6 @@ import backup from "./backup.js";
 import bridge from "./bridge.js";
 import menu from "./menu.js";
 import vim from "./vim.js";
+import hover from "./hover.js";
 
-export default [settings, diagnostics, favicons, tree, windows, tabs, panels, folders, notes, containers, io, backup, bridge, menu, vim];
+export default [settings, diagnostics, favicons, tree, windows, tabs, panels, folders, notes, containers, io, backup, bridge, menu, vim, hover];

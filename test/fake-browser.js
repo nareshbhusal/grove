@@ -85,6 +85,13 @@ export function createFakeBrowser({ storageData = {} } = {}) {
           .sort((a, b) => a.windowId - b.windowId || a.index - b.index)
           .map(clone);
       },
+      async captureTab(id, opts = {}) {
+        const t = tabs.get(id);
+        if (!t) throw new Error(`Invalid tab ID: ${id}`);
+        if (sim.captureFails) throw new Error("The tab cannot be captured");
+        sim.captures.push({ id, ...opts });
+        return `data:image/jpeg;base64,PIC-${id}-${t.url}`;
+      },
       async goBack(id) { if (!tabs.has(id)) throw new Error(`Invalid tab ID: ${id}`); sim.history.push(["back", id]); },
       async goForward(id) { if (!tabs.has(id)) throw new Error(`Invalid tab ID: ${id}`); sim.history.push(["forward", id]); },
       async sendMessage(id, msg) { sim.pageMessages.push([id, msg]); },
@@ -108,6 +115,7 @@ export function createFakeBrowser({ storageData = {} } = {}) {
           pinned: !!props.pinned, hidden: false, discarded: false, audible: false, status: "complete",
           mutedInfo: { muted: false },
           cookieStoreId: props.cookieStoreId ?? "firefox-default", openerTabId: props.openerTabId, incognito: !!wins.get(windowId)?.incognito,
+          width: 1200, height: 800,
         };
         tabs.set(tab.id, tab);
         inWin(windowId).filter((t) => t !== tab && t.index >= tab.index).forEach((t) => t.index++);
@@ -281,6 +289,8 @@ export function createFakeBrowser({ storageData = {} } = {}) {
     downloads: downloadsList,
     downloadFails: null,
     searches: [],
+    captures: [], // captureTab calls
+    captureFails: false,
     history: [], // goBack / goForward calls
     pageMessages: [], // tabs.sendMessage calls
     // A message from a content script in a tab, the way the background receives it.
@@ -317,6 +327,7 @@ export function createFakeBrowser({ storageData = {} } = {}) {
       const tab = {
         id: nextTab++, windowId, index: inWin(windowId).length, url, title: title ?? url, active, pinned,
         hidden: false, discarded, audible: false, status: "complete", cookieStoreId, incognito: !!wins.get(windowId)?.incognito,
+        width: 1200, height: 800,
         mutedInfo: { muted: false },
       };
       tabs.set(tab.id, tab);

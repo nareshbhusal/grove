@@ -433,3 +433,20 @@ body.private #panelbar::before {
   color: #fff;
   flex: none;
 }
+
+/* Hover preview */
+#preview {
+  position: fixed;
+  z-index: 15;
+  pointer-events: none;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px #0005;
+}
+#preview .pv-shot { display: block; width: 100%; height: auto; background: var(--bg-2); object-fit: cover; object-position: top; }
+#preview .pv-shot.empty { display: grid; place-items: center; padding: 8px; text-align: center; color: var(--fg-dim); font-size: 11px; }
+#preview .pv-text { padding: 6px 8px 7px; border-top: 1px solid var(--line); }
+#preview .pv-title { font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#preview .pv-url { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

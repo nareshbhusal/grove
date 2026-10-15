@@ -114,6 +114,20 @@ several selected rows). The tab lands right after its former parent, and its own
 a tab moves; tabs inside a folder stay in their folder. The shortcut can be turned off under Settings → tabs, or
 changed in about:addons → ⚙ → Manage Extension Shortcuts.
 
+### Hovering a tab
+
+Settings → hover.
+
+- **Tooltip**: the address (as before), the title, or both.
+- **Page preview**: off (default), on when hovering the tab, or on when hovering its icon only. A card with a picture of
+  the page and the same title/address text appears over the list after a short wait (setting; moving from one tab to
+  the next shows at once). Its width is a setting; it never exceeds the sidebar. Clicking, scrolling, dragging or pressing a key dismisses it.
+- The picture is a screenshot (`tabs.captureTab`) taken while the tab is in front, about a second after it loads and when you
+  arrive on it. Firefox can only draw the tab you are looking at, so a tab you have not visited since turning this on shows
+  "No preview yet". Pictures are kept in memory (the latest 150): not saved, not exported, gone on restart, and a private
+  window's pictures go only to private windows. Switching the preview off discards them and stops capturing.
+- Folders, notes and Firefox's own pages (about:…) have no preview; they keep the browser's tooltip.
+
 ### Vim-style keys
 
 Settings → vim (off until you tick it; untick to pause). They work on web pages and while the sidebar has the focus,

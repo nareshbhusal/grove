@@ -10,6 +10,7 @@ import { createNoteEditor } from "./ui/note-editor.js";
 import { createSearchBar } from "./ui/search-bar.js";
 import { askText } from "./ui/dialog.js";
 import { icon } from "./ui/icons.js";
+import { createHover } from "./ui/hover.js";
 
 let windowId = null;
 let incognito = false;
@@ -47,6 +48,9 @@ const tree = createTreeView({
   onResults: ({ count, searching }) => search.setCount(count, searching),
   onOpenFolder: () => search.close(), // going into a folder from the results ends the search
 });
+
+// The picture and text that appear when you rest on a tab (settings → hover).
+const hover = createHover({ root: $("tree"), card: $("preview"), getState, getWindowId });
 
 // Collapsed until asked for. The list filters itself; the bar only holds the field.
 const search = createSearchBar({
@@ -145,6 +149,7 @@ function renderAll() {
   }
   search.setScope(v.folderId ? `in ${placeName()} and subfolders` : `in ${placeName()}`);
   tree.render();
+  hover.refresh();
 }
 
 async function main() {

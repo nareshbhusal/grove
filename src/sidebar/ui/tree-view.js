@@ -14,6 +14,7 @@ import { isExternal, readLinks } from "./external-drop.js";
 import { h, run, cmd, toast } from "./client.js";
 import { icon, twistyIcon } from "./icons.js";
 import { askConfirm } from "./dialog.js";
+import { tooltipText, previewable, previewMode } from "../../lib/hover.js";
 
 const COLORS = {
   blue: "#37adff", turquoise: "#00c79a", green: "#51cd00", yellow: "#ffcb00",
@@ -289,6 +290,12 @@ export function createTreeView({ root, getState, getWindowId, openMenu, openNote
     const unloaded = !isFolder && !isNote && !ghost && !!node.discarded;
     const color = isFolder || isNote ? null : containerColor(node.cookieStoreId);
 
+    // The browser's own tooltip, as the hover settings ask. When the preview card appears for the whole
+    // row it carries the same text, so the tooltip steps aside.
+    const hv = state.settings?.hover ?? {};
+    const note = unloaded ? "Not loaded yet. It loads when you open it.\n" : ghost ? "Not open in Firefox. Click to open it.\n" : "";
+    const tip = previewMode(hv) === "row" && previewable(node) ? null : tooltipText(node, hv.tooltip, title, note);
+
     const twisty = h("span", {
       class: `twisty${hasChildren ? " has" : ""}${hasChildren && !collapsed ? " open" : ""}`,
       onclick: (e) => {
@@ -358,7 +365,7 @@ export function createTreeView({ root, getState, getWindowId, openMenu, openNote
       twisty,
       color ? h("span", { class: "ctr" }) : null,
       iconEl,
-      h("span", { class: "title", title: `${unloaded ? "Not loaded yet. It loads when you open it.\n" : ghost ? "Not open in Firefox. Click to open it.\n" : ""}${node.url || title}` },
+      h("span", { class: "title", title: tip },
         ...(ctx.terms ? highlight(title, ctx.terms).map((p) => (p.hit ? h("mark", {}, p.text) : p.text)) : [title])),
       where ? h("span", { class: "where", title: where }, where) : null,
       node.split ? h("span", { class: "split", title: "Shown side by side with another tab (split view)" }, icon("split", { size: 12 })) : null,
