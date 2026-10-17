@@ -5,12 +5,14 @@
 //   ui: "rename"   { args: {id}, current }          asks for a name, runs tree:rename
 //   ui: "prompt"   { title, initial, field, command, args, withWindow }
 //   ui: "confirm"  { message, okLabel, command, args }
+//   ui: "bookmark" { args: { ids }, initial, count }  asks which bookmark folder, then saves there
 //   submenu: "containers"
 // Local item kinds: { label, onSelect, danger }, { separator }, { heading },
 //   { swatches: [colours], current, onPick }
 
 import { h, run, cmd } from "./client.js";
 import { askText, askConfirm } from "./dialog.js";
+import { pickBookmarkFolder } from "./bookmark-picker.js";
 
 export function createContextMenu({ root, getContainers, getWindowId }) {
   function hide() {
@@ -82,6 +84,17 @@ export function createContextMenu({ root, getContainers, getWindowId }) {
         },
       };
     }
+    if (item.ui === "bookmark") {
+      return {
+        ...item,
+        onSelect: async () => {
+          const pick = await pickBookmarkFolder({ title: item.count > 1 ? `Save ${item.count} items to…` : "Save to…", initial: item.initial });
+          if (!pick) return;
+          await run("bookmarks:save", withWindow({ ...item.args, parentId: pick.id }));
+          if (pick.makeDefault) run("bookmarks:setDefault", { id: pick.id, stopAsking: true });
+        },
+      };
+    }
     if (item.submenu === "containers") {
       return {
         ...item,
@@ -112,7 +125,26 @@ export function createContextMenu({ root, getContainers, getWindowId }) {
     }));
   }
 
-  document.addEventListener("mousedown", (e) => { if (!root.contains(e.target)) hide(); });
+  // A click outside an open menu only closes it: the press, and the release and click that follow, never
+  // reach what was under the pointer (as in every native menu). A right-click goes through, so it can open
+  // the menu of whatever it landed on.
+  let swallowing = false;
+  document.addEventListener("mousedown", (e) => {
+    if (root.hidden || root.contains(e.target)) return;
+    hide();
+    if (e.button === 2) return;
+    e.preventDefault();
+    e.stopPropagation();
+    swallowing = true;
+  }, true);
+  for (const type of ["mouseup", "click", "auxclick", "dblclick"]) {
+    document.addEventListener(type, (e) => {
+      if (!swallowing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (type === "mouseup") setTimeout(() => { swallowing = false; }, 80); // the click follows the release at once
+    }, true);
+  }
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
   window.addEventListener("blur", hide);
 

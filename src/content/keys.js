@@ -46,8 +46,9 @@
 
   const isRootScroller = (el, win) => el === win.document.scrollingElement || el === win.document.documentElement || el === win.document.body;
 
-  // j / k move a little (at once, so holding the key is smooth), d / u half a screen, gg / G the ends.
-  function scrollElement(el, action, win = globalThis) {
+  // j / k move a little, d / u half a screen, gg / G the ends: all of them glide, so a single press is smooth.
+  // A key that is held (`held`) moves at once instead: a glide started on every repeat would lag behind the finger.
+  function scrollElement(el, action, win = globalThis, { held = false } = {}) {
     const root = isRootScroller(el, win);
     const view = root ? win.innerHeight : el.clientHeight;
     const target = root ? win : el;
@@ -55,8 +56,8 @@
     const by = (top, soft) => target.scrollBy({ top, behavior: soft && !calm ? "smooth" : "auto" });
     const to = (top) => target.scrollTo({ top, behavior: calm ? "auto" : "smooth" });
     switch (action) {
-      case "scrollDown": return by(STEP, false);
-      case "scrollUp": return by(-STEP, false);
+      case "scrollDown": return by(STEP, !held);
+      case "scrollUp": return by(-STEP, !held);
       case "pageDown": return by(view / 2, true);
       case "pageUp": return by(-view / 2, true);
       case "top": return to(0);
@@ -139,7 +140,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat && !REPEATABLE.has(action)) return true; // taken, but done once
-      if (SCROLL_ACTIONS.has(action)) scroll(action);
+      if (SCROLL_ACTIONS.has(action)) scroll(action, { held: !!e.repeat });
       else if (action === "hints") { if (!e.repeat) hints.start(); }
       else send(action);
       return true;
@@ -198,7 +199,7 @@
       scrolling: () => scrollOn,
       hints,
       hinting: () => hintOn,
-      scroll: (action) => scrollElement(findScroller(window), action, window),
+      scroll: (action, opts) => scrollElement(findScroller(window), action, window, opts),
       send: (action) => { b.runtime.sendMessage({ type: "vim:key", action }).catch(() => {}); },
     });
   }

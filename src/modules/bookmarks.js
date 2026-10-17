@@ -4,16 +4,19 @@
 //
 // What Grove adds on top:
 //   - saving tabs: a tab becomes a bookmark, a tab with children or a folder becomes a bookmark
-//     FOLDER with the same shape (a bookmark tree is a tree, so the hierarchy survives). They go
-//     into a folder of their own, "Grove" inside Other Bookmarks (the name is a setting).
+//     FOLDER with the same shape (a bookmark tree is a tree, so the hierarchy survives). You choose
+//     the folder each time (a picker in the sidebar), or set one as the default and stop being asked.
 //   - opening them: a bookmark opens a tab (or switches to the tab that already shows it); a folder opens as
 //     a Grove folder of "saved" tabs that are NOT loaded until you click them, so a hundred bookmarks
 //     cost nothing but rows.
 //   - delete with undo, and the bookmarks go into exports and backups (and come back by import).
 //
 // Commands (the sidebar's bookmark view uses these):
-//   bookmarks:tree     {}                                  -> { roots: [simple], groveId }
+//   bookmarks:tree     {}                                  -> { roots: [simple] }
 //   bookmarks:save     { ids, parentId?, windowId? }       -> { saved, folders, duplicates, skipped, parentId }
+//                      (no parentId: the default folder, else Other Bookmarks)
+//   bookmarks:prefs    {}                                  -> { ask, defaultId, defaultTitle, lastId }
+//   bookmarks:setDefault { id, stopAsking? }               id null clears it
 //   bookmarks:open     { id, windowId, mode? }             mode "tab" (default) | "child" | "background"
 //   bookmarks:openFolder { id, windowId, loaded? }         -> the Grove folder it made
 //   bookmarks:create   { parentId, title, url?, index? }   -> id
@@ -32,7 +35,7 @@ export default {
   name: "bookmarks",
   deps: ["tree", "windows", "tabs", "folders", "settings", "bridge"],
 
-  setup({ api, bus, commands, hooks, log, modules }) {
+  async setup({ api, bus, commands, hooks, log, modules }) {
     const { tree, windows, tabs, settings, bridge } = modules;
     const native = () => {
       if (!api.bookmarks) throw new Error("Firefox did not give Grove access to bookmarks (the extension needs the bookmarks permission)");
@@ -40,17 +43,28 @@ export default {
     };
 
     settings.register("bookmarks", {
-      folder: { type: "text", label: "Save tabs as bookmarks into this folder (inside Other Bookmarks; made when first needed)", default: "Grove" },
+      ask: { type: "boolean", label: "Ask which folder to save into each time (untick to use the default folder, which you set in that dialog)", default: true },
       reuse: { type: "boolean", label: "Opening a bookmark switches to the tab that already shows it, instead of opening another", default: true },
       backup: {
         type: "select",
         label: "Bookmarks in exports and backups",
         default: "all",
-        options: [["all", "All bookmarks"], ["grove", "Only the Grove folder"], ["none", "None"]],
+        options: [["all", "All bookmarks"], ["none", "None"]],
       },
     });
     const get = (k) => settings.get("bookmarks", k);
-    const folderName = () => String(get("folder") ?? "").trim() || "Grove";
+
+    // Where you last saved to, and the default folder: kept apart from settings (they are folder ids of this profile).
+    const PREFS = "grove:bookmarks";
+    let prefs = { defaultId: null, lastId: null };
+    try { prefs = { ...prefs, ...((await api.storage.local.get(PREFS))?.[PREFS] ?? {}) }; } catch { /* first run */ }
+    const savePrefs = () => api.storage.local.set({ [PREFS]: prefs }).catch((e) => log.warn("bookmark choices not saved", e));
+    // A folder id that is still a real, writable folder (not the root, not a bookmark), else null.
+    async function folderOk(id) {
+      if (!id || id === B.ROOT) return null;
+      const [n] = await api.bookmarks.get(id).catch(() => []);
+      return n && n.type === "folder" ? n : null;
+    }
 
     // ---- reading ---------------------------------------------------------
 
@@ -59,16 +73,20 @@ export default {
       return (top?.children ?? []).map(B.simplify);
     }
 
-    async function findGrove(create = false) {
-      const name = folderName();
-      const kids = await native().getChildren(B.OTHER).catch(() => []);
-      const hit = kids.find((k) => k.type === "folder" && k.title === name);
-      if (hit) return hit.id;
-      if (!create) return null;
-      return (await native().create({ parentId: B.OTHER, title: name })).id;
-    }
+    commands.register("bookmarks:tree", async () => ({ roots: await roots() }), { title: "Bookmarks" });
 
-    commands.register("bookmarks:tree", async () => ({ roots: await roots(), groveId: await findGrove(false) }), { title: "Bookmarks" });
+    commands.register("bookmarks:prefs", async () => {
+      const def = await folderOk(prefs.defaultId);
+      const last = await folderOk(prefs.lastId);
+      return { ask: !!get("ask") || !def, defaultId: def?.id ?? null, defaultTitle: def?.title ?? null, lastId: last?.id ?? null };
+    });
+
+    commands.register("bookmarks:setDefault", async ({ id = null, stopAsking = false }) => {
+      prefs.defaultId = id && (await folderOk(id)) ? id : null;
+      await savePrefs();
+      if (stopAsking && prefs.defaultId) await commands.run("settings:set", { module: "bookmarks", key: "ask", value: false });
+      return true;
+    });
 
     // ---- writing ---------------------------------------------------------
 
@@ -108,7 +126,8 @@ export default {
 
     commands.register("bookmarks:save", async ({ ids = [], parentId = null, windowId = null }) => {
       const { plan, skipped } = B.planFromTree(tree.all(), ids);
-      const into = parentId ?? (plan.length ? await findGrove(true) : null);
+      // Where you chose, else the default folder, else Other Bookmarks. Nothing is ever made for you.
+      const into = (await folderOk(parentId))?.id ?? (await folderOk(prefs.defaultId))?.id ?? B.OTHER;
       if (!plan.length || !into) {
         const out = { saved: 0, folders: 0, duplicates: 0, skipped: skipped.notes + skipped.pages, parentId: into };
         notify(windowId, skipped.notes && !skipped.pages ? "Notes are not saved to bookmarks (they stay in their folder)" : "Nothing here to bookmark");
@@ -117,6 +136,7 @@ export default {
       // Several things at once keep together, in a folder named for the moment, easy to rename or move.
       const wrapped = plan.length > 1 ? [{ type: "folder", title: `Saved ${stamp()}`, children: plan }] : plan;
       const c = await make(into, wrapped);
+      if (parentId && prefs.lastId !== into) { prefs.lastId = into; savePrefs(); }
       const out = { ...c, skipped: skipped.notes + skipped.pages, parentId: into };
       notify(windowId, summary(out, await nameOf(into)));
       return out;
@@ -242,13 +262,7 @@ export default {
       if (scope === "none" || !api.bookmarks) return null;
       try {
         const list = await roots();
-        if (scope === "grove") {
-          const id = await findGrove(false);
-          const other = list.find((r) => r.id === B.OTHER);
-          const grove = other?.children?.find((c) => c.id === id);
-          return { scope, roots: grove ? [{ root: B.OTHER, title: other.title, children: B.toSnapshotItems([grove]) }] : [] };
-        }
-        return { scope, roots: list.map((r) => ({ root: r.id, title: r.title, children: B.toSnapshotItems(r.children) })) };
+        return { scope: "all", roots: list.map((r) => ({ root: r.id, title: r.title, children: B.toSnapshotItems(r.children) })) };
       } catch (err) {
         log.warn("bookmarks left out of the export", err);
         return null;
@@ -282,27 +296,41 @@ export default {
     // ---- menus -----------------------------------------------------------
 
     const few = (n) => (n === 1 ? "" : `s`);
-    hooks.tap("ui:menu", (items, { node, selection }) => {
+    // The save entries for a menu: one that asks where (a picker), or, once a default is set and asking is off,
+    // one that saves straight there and one that asks.
+    async function saveItems(id, what, ids) {
+      const def = await folderOk(prefs.defaultId);
+      const last = await folderOk(prefs.lastId);
+      const initial = def?.id ?? last?.id ?? B.OTHER;
+      const asks = { id: `${id}-pick`, ui: "bookmark", args: { ids }, initial, count: ids.length, withWindow: true };
+      if (get("ask") || !def) return [{ ...asks, label: `${what}…` }];
+      return [
+        { id, label: `${what} to “${def.title || "Untitled"}”`, command: "bookmarks:save", args: { ids, parentId: def.id }, withWindow: true },
+        { ...asks, label: `${what} to…` },
+      ];
+    }
+    const placed = (items, entries, beforeId) => {
+      const at = items.findIndex((i) => i.id === beforeId);
+      return at < 0 ? [...items, ...entries] : [...items.slice(0, at), ...entries, ...items.slice(at)];
+    };
+
+    hooks.tap("ui:menu", async (items, { node, selection }) => {
       if (!api.bookmarks) return items;
       const all = tree.all();
       if (selection) {
-        const n = selection.filter((i) => all[i] && all[i].type !== "note").length;
-        if (!n) return items;
-        const entry = { id: "bm-save-sel", label: `Bookmark ${n} item${few(n)}`, command: "bookmarks:save", args: { ids: selection }, withWindow: true };
-        const at = items.findIndex((i) => i.id === "sel-sep2");
-        return at < 0 ? [...items, entry] : [...items.slice(0, at), entry, ...items.slice(at)];
+        const picked = selection.filter((i) => all[i] && all[i].type !== "note");
+        if (!picked.length) return items;
+        return placed(items, await saveItems("bm-save-sel", `Bookmark ${picked.length} item${few(picked.length)}`, selection), "sel-sep2");
       }
       if (!node || node.type === "note") return items;
       const below = T.descendantsOf(all, node.id).length;
-      const label = node.type === "folder" ? "Save folder to bookmarks" : below ? "Bookmark tab and children" : "Bookmark tab";
+      const what = node.type === "folder" ? "Save folder to bookmarks" : below ? "Bookmark tab and children" : "Bookmark tab";
       // Next to the other things you do with a tab, before the separator that leads to closing it.
-      const at = items.findIndex((i) => i.id === "sep3");
-      const item = { id: "bm-save", label, command: "bookmarks:save", args: { ids: [node.id] }, withWindow: true };
-      return at < 0 ? [...items, item] : [...items.slice(0, at), item, ...items.slice(at)];
+      return placed(items, await saveItems("bm-save", what, [node.id]), "sep3");
     }, { priority: 60 });
 
     return {
-      exports: { snapshot, restore, make, findGrove, roots },
+      exports: { snapshot, restore, make, roots },
       teardown() {
         changed.cancel();
         for (const t of listen) t.removeListener?.(changed);

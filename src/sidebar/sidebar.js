@@ -199,7 +199,7 @@ async function main() {
   globalThis.groveVimKeys?.install(window, {
     active: () => !!state?.settings?.vim?.enabled,
     scrolling: () => state?.settings?.vim?.scrollKeys !== false,
-    scroll: (action) => globalThis.groveVimKeys.scrollElement(marks.isOpen() ? marks.el : $("tree"), action, window), // the list is what scrolls here
+    scroll: (action, opts) => globalThis.groveVimKeys.scrollElement(marks.isOpen() ? marks.el : $("tree"), action, window, opts), // the list is what scrolls here
     send: (action) => (action === "search" ? (marks.isOpen() ? marks.focusSearch() : search.show()) : run("vim:do", { action, windowId })),
   });
 }

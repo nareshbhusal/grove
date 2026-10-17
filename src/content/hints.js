@@ -199,17 +199,16 @@
 
   const CSS = `
     :host { all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }
-    .tag { position: fixed; display: flex; padding: 1px 4px; border-radius: 3px; font: 700 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      letter-spacing: .04em; text-transform: uppercase; color: #1d1700; background: #ffd84d; border: 1px solid #b38f00;
-      box-shadow: 0 1px 3px rgba(0,0,0,.35); white-space: nowrap; }
-    .tag.field { background: #9ed3ff; border-color: #2f7bb8; color: #06223a; }
+    .tag { position: fixed; display: flex; padding: 1px 5px 2px; border-radius: 6px; font: 700 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: .06em; text-transform: uppercase; color: #f2f5ff; background: #151a2b; border: 1px solid #5eead4;
+      box-shadow: 0 0 0 1px rgba(21,26,43,.55), 0 2px 6px rgba(0,0,0,.4); white-space: nowrap; }
+    .tag.field { background: #2c1b5a; border-color: #c4b5fd; color: #f3efff; }
     .tag.gone { display: none; }
-    .tag .done { opacity: .38; }
+    .tag .done { color: #5eead4; }
+    .tag.field .done { color: #c4b5fd; }
     .hud { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 5px 12px; border-radius: 999px;
       font: 12px/1.4 system-ui, sans-serif; color: #fff; background: rgba(28,28,32,.86); box-shadow: 0 2px 8px rgba(0,0,0,.35); white-space: nowrap; }
-    .hud b { font-weight: 700; color: #ffd84d; }
-    @media (prefers-reduced-motion: no-preference) { .tag { transition: opacity .08s; } }
-    @media (prefers-color-scheme: dark) { .tag { box-shadow: 0 1px 3px rgba(0,0,0,.7); } }
+    .hud b { font-weight: 700; color: #5eead4; }
   `;
 
   function create(win, { chars = () => DEFAULT_CHARS, open = () => {} } = {}) {

@@ -10,10 +10,7 @@ async function setup(urls = ["a", "b"]) {
   const t = await boot({ seed: urls.map((n, i) => ({ url: U(n), active: i === 0 })) });
   t.node = (n) => t.nodeByUrl(U(n));
   t.marks = async () => (await t.run("bookmarks:tree")).roots;
-  t.grove = async () => {
-    const { roots, groveId } = await t.run("bookmarks:tree");
-    return groveId ? roots.find((r) => r.id === OTHER).children.find((c) => c.id === groveId) : null;
-  };
+  t.other = async () => (await t.marks()).find((r) => r.id === OTHER);
   return t;
 }
 const shape = (list) => list.map((n) => (n.type === "folder" ? { [n.title]: shape(n.children) } : n.url));
@@ -25,29 +22,67 @@ test("the bookmark tree is the browser's own, with its four built-in folders", a
   t.sim.seedBookmarks("toolbar_____", [{ title: "News", url: "https://news.test/" }]);
   const { roots, groveId } = await t.run("bookmarks:tree");
   assert.deepEqual(roots.map((r) => r.id), ["menu________", "toolbar_____", "unfiled_____", "mobile______"]);
-  assert.equal(groveId, null, "no Grove folder until something is saved");
+  assert.equal(groveId, undefined, "Grove makes no folder of its own");
   assert.equal(roots[1].children[0].url, "https://news.test/");
 });
 
 // ---- saving tabs ----
 
-test("a tab is saved into a Grove folder inside Other Bookmarks, made when first needed", async () => {
+test("a tab with no folder chosen goes to Other Bookmarks, and Grove makes no folder of its own", async () => {
   const t = await setup();
   const r = await t.run("bookmarks:save", { ids: [t.node("a")] });
   assert.equal(r.saved, 1);
-  assert.deepEqual(shape([await t.grove()]), [{ Grove: [U("a")] }]);
-  const other = (await t.marks()).find((x) => x.id === OTHER);
-  assert.equal(other.children.filter((c) => c.title === "Grove").length, 1);
-  await t.run("bookmarks:save", { ids: [t.node("b")] });
-  assert.equal((await t.marks()).find((x) => x.id === OTHER).children.filter((c) => c.title === "Grove").length, 1, "the same folder is used again");
+  assert.equal(r.parentId, OTHER);
+  assert.deepEqual(shape((await t.other()).children), [U("a")]);
+  assert.ok(!JSON.stringify(await t.marks()).includes('"Grove"'));
 });
 
-test("the folder's name is a setting", async () => {
+test("a tab goes where you chose, and that is remembered as the place last used", async () => {
   const t = await setup();
-  await t.run("settings:set", { module: "bookmarks", key: "folder", value: "Read later" });
-  await t.run("bookmarks:save", { ids: [t.node("a")] });
-  const other = (await t.marks()).find((x) => x.id === OTHER);
-  assert.deepEqual(other.children.map((c) => c.title), ["Read later"]);
+  const dir = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "Read", url: undefined });
+  const r = await t.run("bookmarks:save", { ids: [t.node("a")], parentId: dir });
+  assert.equal(r.parentId, dir);
+  assert.deepEqual(shape((await t.marks()).find((x) => x.id === "toolbar_____").children), [{ Read: [U("a")] }]);
+  assert.equal((await t.run("bookmarks:prefs")).lastId, dir);
+  assert.deepEqual(shape((await t.other()).children), []);
+});
+
+test("a folder that is gone, or is not a folder, falls back instead of failing", async () => {
+  const t = await setup();
+  const bm = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "B", url: U("x") });
+  for (const parentId of ["nope", bm, "root________"]) {
+    const r = await t.run("bookmarks:save", { ids: [t.node("a")], parentId });
+    assert.equal(r.parentId, OTHER, String(parentId));
+  }
+});
+
+test("a default folder is used when none is chosen; one that is later deleted is forgotten", async () => {
+  const t = await setup();
+  const dir = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "Inbox" });
+  assert.equal(await t.run("bookmarks:setDefault", { id: dir }), true);
+  let p = await t.run("bookmarks:prefs");
+  assert.equal(p.defaultId, dir);
+  assert.equal(p.defaultTitle, "Inbox");
+  assert.equal(p.ask, true, "still asking until told to stop");
+  assert.equal((await t.run("bookmarks:save", { ids: [t.node("a")] })).parentId, dir);
+  await t.run("bookmarks:remove", { id: dir });
+  p = await t.run("bookmarks:prefs");
+  assert.equal(p.defaultId, null);
+  assert.equal(p.ask, true);
+  assert.equal((await t.run("bookmarks:save", { ids: [t.node("b")] })).parentId, OTHER);
+});
+
+test("stop asking needs a real default; an invalid one clears it", async () => {
+  const t = await setup();
+  await t.run("bookmarks:setDefault", { id: "nope", stopAsking: true });
+  assert.equal((await t.run("bookmarks:prefs")).defaultId, null);
+  assert.equal(t.m.settings.get("bookmarks", "ask"), true, "nothing to fall back on: keep asking");
+  const dir = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "Inbox" });
+  await t.run("bookmarks:setDefault", { id: dir, stopAsking: true });
+  assert.equal(t.m.settings.get("bookmarks", "ask"), false);
+  assert.equal((await t.run("bookmarks:prefs")).ask, false);
+  await t.run("bookmarks:setDefault", { id: null });
+  assert.equal((await t.run("bookmarks:prefs")).ask, true, "no default: it has to ask");
 });
 
 test("a tab with children becomes a folder in the same shape; a Grove folder too; notes stay behind", async () => {
@@ -58,11 +93,12 @@ test("a tab with children becomes a folder in the same shape; a Grove folder too
   await t.run("note:create", { folderId: f, name: "Thoughts" });
   const r = await t.run("bookmarks:save", { ids: [t.node("a")] });
   assert.equal(r.saved, 3);
-  assert.deepEqual(shape((await t.grove()).children), [{ [t.m.tree.get(t.node("a")).title]: [U("a"), { [t.m.tree.get(t.node("kid")).title]: [U("kid"), U("grand")] }] }]);
+  const kids = async () => (await t.other()).children;
+  assert.deepEqual(shape(await kids()), [{ [t.m.tree.get(t.node("a")).title]: [U("a"), { [t.m.tree.get(t.node("kid")).title]: [U("kid"), U("grand")] }] }]);
   const r2 = await t.run("bookmarks:save", { ids: [f] });
   assert.equal(r2.saved, 1);
   assert.equal(r2.skipped, 1, "the note is not saved");
-  assert.ok(shape((await t.grove()).children).some((x) => x.Research && x.Research[0] === U("solo")));
+  assert.ok(shape(await kids()).some((x) => x.Research && x.Research[0] === U("solo")));
 });
 
 test("saving the same thing twice changes nothing", async () => {
@@ -79,7 +115,7 @@ test("saving the same thing twice changes nothing", async () => {
 test("several tabs at once keep together in a folder named for the moment", async () => {
   const t = await setup(["a", "b", "c"]);
   await t.run("bookmarks:save", { ids: [t.node("c"), t.node("a")] });
-  const g = await t.grove();
+  const g = await t.other();
   assert.equal(g.children.length, 1);
   assert.match(g.children[0].title, /^Saved \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   assert.deepEqual(shape(g.children[0].children), [U("a"), U("c")], "in the order they are shown, whatever order they were picked in");
@@ -91,7 +127,7 @@ test("a new tab is not worth keeping, and nothing is made when there is nothing 
   await settle();
   const r = await t.run("bookmarks:save", { ids: [t.m.tabs.nodeIdOf(blank.id)] });
   assert.equal(r.saved, 0);
-  assert.equal(await t.grove(), null, "no empty Grove folder either");
+  assert.deepEqual((await t.other()).children, [], "and nothing is made for it");
 });
 
 test("saving tells the window it was saved from", async () => {
@@ -102,22 +138,53 @@ test("saving tells the window it was saved from", async () => {
   await settle();
   await t.run("bookmarks:save", { ids: [t.node("a")], windowId: t.winId });
   const toast = ui.received.find((m) => m.type === "toast");
-  assert.match(toast.text, /1 bookmark saved to “Grove”/);
+  assert.match(toast.text, /1 bookmark saved to “Other Bookmarks”/);
   assert.ok(!elsewhere.received.some((m) => m.type === "toast"));
 });
 
-test("the menu offers to bookmark a tab, a branch, a folder and a selection", async () => {
+test("the menu offers to bookmark a tab, a branch, a folder and a selection; each opens the folder picker", async () => {
   const t = await setup(["a", "b"]);
   const labels = (items) => items.filter((i) => !i.separator).map((i) => i.label);
-  assert.ok(labels(await t.run("ui:menu", { id: t.node("a") })).includes("Bookmark tab"));
+  const find = (items, label) => items.find((i) => i.label === label);
+  const tab = await t.run("ui:menu", { id: t.node("a") });
+  const item = find(tab, "Bookmark tab…");
+  assert.ok(item);
+  assert.equal(item.ui, "bookmark");
+  assert.deepEqual(item.args.ids, [t.node("a")]);
+  assert.equal(item.initial, OTHER, "no default and nothing saved yet: Other Bookmarks");
   await t.run("tree:move", { id: t.node("b"), parentId: t.node("a"), index: 0 });
-  assert.ok(labels(await t.run("ui:menu", { id: t.node("a") })).includes("Bookmark tab and children"));
+  assert.ok(labels(await t.run("ui:menu", { id: t.node("a") })).includes("Bookmark tab and children…"));
   const f = await t.run("folder:create", { name: "F", panelId: t.panelId, nodeIds: [t.node("a")] });
-  assert.ok(labels(await t.run("ui:menu", { id: f })).includes("Save folder to bookmarks"));
+  assert.ok(labels(await t.run("ui:menu", { id: f })).includes("Save folder to bookmarks…"));
   const note = await t.run("note:create", { folderId: f, name: "n" });
   assert.ok(!labels(await t.run("ui:menu", { id: note })).some((l) => /ookmark/.test(l)), "a note has no address");
   const sel = await t.run("ui:menu", { ids: [t.node("a"), t.node("b")] });
-  assert.ok(labels(sel).includes("Bookmark 2 items"));
+  assert.ok(labels(sel).includes("Bookmark 2 items…"));
+});
+
+test("with a default and asking off, the menu saves straight there and keeps a way to choose", async () => {
+  const t = await setup(["a"]);
+  const dir = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "Inbox" });
+  await t.run("bookmarks:setDefault", { id: dir, stopAsking: true });
+  const items = await t.run("ui:menu", { id: t.node("a") });
+  const direct = items.find((i) => i.label === "Bookmark tab to “Inbox”");
+  assert.ok(direct);
+  assert.equal(direct.command, "bookmarks:save");
+  assert.equal(direct.args.parentId, dir);
+  const pick = items.find((i) => i.label === "Bookmark tab to…");
+  assert.equal(pick.ui, "bookmark");
+  assert.equal(pick.initial, dir);
+  assert.ok(!items.some((i) => i.label === "Bookmark tab…"));
+  await t.run("settings:set", { module: "bookmarks", key: "ask", value: true });
+  assert.ok((await t.run("ui:menu", { id: t.node("a") })).some((i) => i.label === "Bookmark tab…"), "asking again brings the picker back");
+});
+
+test("the picker starts at the place last used when there is no default", async () => {
+  const t = await setup(["a"]);
+  const dir = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "Read" });
+  await t.run("bookmarks:save", { ids: [t.node("a")], parentId: dir });
+  const item = (await t.run("ui:menu", { id: t.node("a") })).find((i) => i.ui === "bookmark");
+  assert.equal(item.initial, dir);
 });
 
 // ---- managing ----
@@ -264,14 +331,14 @@ test("a JSON export carries the bookmarks, and importing it elsewhere adds only 
   assert.deepEqual(shape((await fresh.marks()).find((x) => x.id === "toolbar_____").children), [U("news"), { Dir: [U("in")] }]);
 });
 
-test("the setting decides how much of the bookmarks is exported", async () => {
+test("the setting decides whether the bookmarks are exported", async () => {
   const t = await setup(["a"]);
   t.sim.seedBookmarks("toolbar_____", [{ title: "News", url: U("news") }]);
-  await t.run("bookmarks:save", { ids: [t.node("a")] });
-  await t.run("settings:set", { module: "bookmarks", key: "backup", value: "grove" });
   let file = JSON.parse((await t.run("io:export", { scope: "all", format: "json" })).text);
-  assert.deepEqual(file.bookmarks.roots.map((r) => r.root), ["unfiled_____"]);
-  assert.deepEqual(shape(file.bookmarks.roots[0].children), [{ Grove: [U("a")] }], "only the Grove folder");
+  assert.deepEqual(file.bookmarks.roots.map((r) => r.root), ["menu________", "toolbar_____", "unfiled_____", "mobile______"]);
+  await t.run("settings:set", { module: "bookmarks", key: "backup", value: "grove" }).catch(() => {});
+  file = JSON.parse((await t.run("io:export", { scope: "all", format: "json" })).text);
+  assert.ok(file.bookmarks, "an old value from the Grove-folder days still exports everything");
   await t.run("settings:set", { module: "bookmarks", key: "backup", value: "none" });
   file = JSON.parse((await t.run("io:export", { scope: "all", format: "json" })).text);
   assert.equal(file.bookmarks, undefined);

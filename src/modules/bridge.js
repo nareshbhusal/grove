@@ -155,6 +155,9 @@ export default {
       const here = [...ports].filter(([, s]) => s.windowId === windowId);
       if (here.length) {
         for (const [p] of here) p.postMessage({ type: "search" });
+        // Already open: asking Firefox to "open" it again is how an extension moves the keyboard focus into it
+        // (the page itself cannot). If Firefox refuses, the field still opens; click it.
+        try { await api.sidebarAction?.open(); } catch { /* not from a key press */ }
         return true;
       }
       wantsSearch.set(windowId, Date.now() + 5000);

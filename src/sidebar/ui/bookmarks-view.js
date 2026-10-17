@@ -16,13 +16,14 @@ import { filterTree, hostOf, samePage } from "../../lib/bookmarks.js";
 import { highlight } from "../../lib/search.js";
 import { isExternal, readLinks } from "./external-drop.js";
 
+// Firefox's built-in folders. Menu and Mobile are rarely used: they come last, and only while they hold something.
 const SCOPES = [
-  ["grove", "Grove"],
   ["toolbar_____", "Toolbar"],
-  ["menu________", "Menu"],
   ["unfiled_____", "Other"],
   ["mobile______", "Mobile"],
+  ["menu________", "Menu"],
 ];
+const OPTIONAL = new Set(["mobile______", "menu________"]);
 const KEY = "grove:bookmarks-view";
 
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY) ?? "{}") ?? {}; } catch { return {}; } };
@@ -30,10 +31,10 @@ const write = (v) => { try { localStorage.setItem(KEY, JSON.stringify(v)); } cat
 
 export function createBookmarksView({ root, getState, getWindowId, showMenu, onToggle = () => {} }) {
   let open = false;
-  let data = null; // { roots, groveId }
+  let data = null; // { roots }
   let loading = false;
   const saved = read();
-  let scope = saved.scope ?? "grove";
+  let scope = SCOPES.some(([id]) => id === saved.scope) ? saved.scope : "toolbar_____";
   const expanded = new Set(saved.expanded ?? []);
   let query = "";
   let cursor = null;
@@ -60,19 +61,17 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   // ---- what is shown ----------------------------------------------------
 
   const rootsById = () => new Map((data?.roots ?? []).map((r) => [r.id, r]));
-  const scopeRoot = () => {
-    if (scope === "grove") return (rootsById().get("unfiled_____")?.children ?? []).find((c) => c.id === data?.groveId) ?? null;
-    return rootsById().get(scope) ?? null;
-  };
+  const scopeRoot = () => rootsById().get(scope) ?? null;
 
   // Where things go when you drop on the empty part of the list, or press "new folder".
-  const scopeParentId = () => (scope === "grove" ? data?.groveId ?? "unfiled_____" : scope);
+  const scopeParentId = () => scope;
 
   function visibleItems() {
     if (!data) return { items: [], filter: null };
     const filter = query.trim() ? { ...filterTree(data.roots, query) } : null;
     // Searching looks everywhere: each built-in folder is a group of results.
-    const items = filter ? data.roots.filter((r) => r.children?.length || r.id !== "mobile______") : (scopeRoot()?.children ?? []);
+    const order = SCOPES.map(([id]) => id);
+    const items = filter ? data.roots.filter((r) => r.children?.length).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)) : (scopeRoot()?.children ?? []);
     return { items, filter: filter?.keep ? filter : null };
   }
 
@@ -102,7 +101,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
 
   function render() {
     scopes.replaceChildren(
-      ...SCOPES.filter(([id]) => id !== "mobile______" || (rootsById().get(id)?.children?.length ?? 0) || scope === id).map(([id, label]) =>
+      ...SCOPES.filter(([id]) => !OPTIONAL.has(id) || (rootsById().get(id)?.children?.length ?? 0) || scope === id).map(([id, label]) =>
         h("button", { class: "chip", role: "tab", "aria-selected": String(!query && scope === id), onclick: () => pick(id) }, label))
     );
     scopes.hidden = !!query.trim();
@@ -122,8 +121,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     if (!rows.length) {
       list.replaceChildren(h("div", { class: "empty" },
         filter ? "Nothing matches." :
-        scope === "grove" && !data.groveId ? "Nothing saved yet. Right-click a tab, a branch or a folder in the tab list and choose Bookmark, and it lands here (a branch keeps its shape as a folder)." :
-        "Empty. Drag a link here, or press the folder button to make a folder."));
+        "Empty. Right-click a tab, a branch or a folder in the tab list and choose Bookmark (a branch keeps its shape as a folder), drag a link here, or press the folder button."));
       return;
     }
     list.replaceChildren(...rows.map(({ node, depth }) => row(node, depth, icons, live, terms)));
@@ -200,7 +198,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const into = parentId ?? scopeParentId();
     const id = await run("bookmarks:create", { parentId: into, title: name });
     if (parentId) expanded.add(parentId);
-    if (id) { cursor = id; if (into === "unfiled_____" && scope === "grove") scope = "unfiled_____"; }
+    if (id) cursor = id;
     remember();
   }
 

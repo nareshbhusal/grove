@@ -78,7 +78,9 @@ test("/ tells an open sidebar to open its search", async () => {
   await settle();
   assert.equal(await t.key("a", "search"), true);
   assert.ok(ui.received.some((m) => m.type === "search"));
-  assert.equal(t.sim.sidebarOpens, 0, "no need to open it");
+  assert.equal(t.sim.sidebarOpens, 1, "asked to open again: that is what hands it the keyboard focus");
+  t.sim.sidebarRefuses = true;
+  assert.equal(await t.key("a", "search"), true, "if Firefox refuses, the search still opens");
 });
 
 test("/ with the sidebar closed opens it, and the search opens as soon as it connects", async () => {

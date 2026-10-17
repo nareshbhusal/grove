@@ -369,12 +369,18 @@ test("scrolling amounts: a little, half a screen, the ends", () => {
   const { scrollElement } = globalThis.groveVimKeys;
   for (const a of ["scrollDown", "scrollUp", "pageDown", "pageUp", "top", "bottom"]) scrollElement(el, a, win);
   assert.deepEqual(calls, [
-    ["by", 60, "auto"], ["by", -60, "auto"],
+    ["by", 60, "smooth"], ["by", -60, "smooth"],
     ["by", 400, "smooth"], ["by", -400, "smooth"],
     ["to", 0, "smooth"], ["to", 5000, "smooth"],
   ]);
   calls.length = 0;
+  scrollElement(el, "scrollDown", win, { held: true });
+  scrollElement(el, "scrollUp", win, { held: true });
+  assert.deepEqual(calls, [["by", 60, "auto"], ["by", -60, "auto"]], "a held key moves at once");
+  calls.length = 0;
   win.matchMedia = () => ({ matches: true }); // reduced motion: no animation
+  scrollElement(el, "scrollDown", win);
+  assert.deepEqual(calls.splice(0), [["by", 60, "auto"]]);
   scrollElement(el, "pageDown", win);
   scrollElement(el, "top", win);
   assert.deepEqual(calls, [["by", 400, "auto"], ["to", 0, "auto"]]);

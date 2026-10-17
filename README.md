@@ -55,6 +55,7 @@ Pinned tabs are not listed by Grove yet, so with the strip hidden they are out o
 | Containers by panel and domain; blocking reroute before any request | `modules/containers.js`, `lib/rules.js` |
 | Select several rows (Ctrl/Cmd-click, Shift-click a range), drag them together, right-click for unload / load / close / move into a new folder / move to a panel | `sidebar/ui/tree-view.js`, `modules/menu.js` |
 | Search (the magnifier, Ctrl+F or `/`): aimed at the panel you are in, or the open folder and its subfolders; matches titles and addresses; `AND`, "quotes" | `lib/search.js`, `sidebar/ui/search-bar.js` |
+| Click outside an open right-click menu: it only closes it and never reaches what was underneath (a right-click still opens that thing's own menu) | `sidebar/ui/context-menu.js` |
 | Drop a link, bookmark or downloaded file onto the list (or a panel tab) to open it as a tab right there | `sidebar/ui/external-drop.js`, `modules/tabs.js` |
 | Rest on a panel tab while dragging to see that panel's tree and drop on an exact spot, without leaving your tab | `sidebar/ui/tree-view.js` |
 | Folders show how many tabs and notes they hold, open or closed | `sidebar/ui/tree-view.js` |
@@ -140,9 +141,9 @@ and are ignored while you type in a field or hold Ctrl, Alt or Meta.
 | `t` | new tab in the current panel (goes into the panel's container, like the + button) |
 | `x` | close the tab. Never the window: closing the last tab opens a new one in its place (and on an already empty last tab it does nothing). Ctrl+Q closes the window |
 | `r` | reload the tab (like Ctrl+R) |
-| `/` | search the tabs: opens Grove's search field, opening the sidebar first if it is closed |
+| `/` | search the tabs, from wherever you are: on a page it opens Grove's search field (opening the sidebar first if it is closed) and hands it the keyboard; in the sidebar it focuses the field |
 | `f` | label what can be clicked (see below) |
-| `j`, `k` | scroll down, up a little |
+| `j`, `k` | scroll down, up a little (a single press glides; holding repeats instantly so it keeps up) |
 | `d`, `u` | scroll half a screen down, up (smooth) |
 | `gg`, `G` | top, bottom of the page |
 | `H`, `L` | back, forward (the arrows next to the address bar) |
@@ -152,8 +153,8 @@ and are ignored while you type in a field or hold Ctrl, Alt or Meta.
 of itself is handled), and the list while the sidebar is focused. Holding `j`/`k`/`d`/`u` keeps scrolling. A separate setting turns
 them off, for pages or extensions that own those keys.
 
-**Link hints (`f`).** Every link, button, field and other clickable thing in view gets a short yellow label (fields are blue),
-sitting on its top-left corner. Type the label to click it: links open, buttons press, a text field gets the cursor (the letters you
+**Link hints (`f`).** Every link, button, field and other clickable thing in view gets a short label, a dark chip with a mint edge (fields are violet), so it is not the usual yellow
+and reads on light and dark pages alike, sitting on its top-left corner. Type the label to click it: links open, buttons press, a text field gets the cursor (the letters you
 typed are not written into it). The labels are as short as they can be and none begins another, so a label is done on its last letter.
 While you type, labels that no longer match disappear; Backspace takes a letter back, Esc leaves, and a letter that matches nothing is ignored.
 **Shift with the last letter of a link's label opens it in a new tab as a child of the current one**, in the same container and behind it, so you can
@@ -177,7 +178,8 @@ the other one off for these keys is the reliable fix; Vimium's "Excluded URLs an
 
 `/` from a page opens the sidebar if needed; Firefox only lets an extension do that in answer to a key press, and I could not check that it
 counts a key pressed on a page, so if the sidebar stays shut, open it once (Alt+Shift+G) and `/` will find it. The sidebar also takes the
-keyboard focus only if Firefox allows that; otherwise click the field.
+keyboard focus only if Firefox allows that (Grove asks again while the sidebar is already open, which is what moves focus into it);
+otherwise click the field.
 
 Limits: Firefox does not run extension scripts on its own pages (about:…), on addons.mozilla.org, in the PDF viewer or in
 view-source, so the keys do nothing there unless the sidebar is focused. A `g` or `<` that begins a sequence is not passed
@@ -187,10 +189,13 @@ to the page; use the exceptions for sites with their own shortcuts.
 
 The bookmark button in the toolbar (or Ctrl+B in the sidebar) swaps the tab list for **Firefox's own bookmarks**: a viewer and manager,
 with no second copy. Everything you do there is done to the real bookmarks, and what changes elsewhere (the Library, Firefox Sync) shows up
-as it happens. Choose a place with the chips (Grove, Toolbar, Menu, Other; Mobile when it has something); searching looks in all of them.
+as it happens. Choose a place with the chips (Toolbar, Other; Mobile when it has something; Menu last, and only when it holds something: it is Firefox's built-in
+folder, which no extension can delete); searching looks in all of them.
 
-- **Save**: right-click a tab, a tab with children, a folder or a selection → *Bookmark…*. They go into a **Grove** folder inside Other
-  Bookmarks (made when first needed; the name is a setting). A tab with children, or a folder, becomes a bookmark *folder* of the same shape, so
+- **Save**: right-click a tab, a tab with children, a folder or a selection → *Bookmark…*. A picker shows your real bookmark folders and you **choose where it goes**
+  (it opens on the folder you used last; *New folder…* makes one inside the chosen one). Tick *Always save here, and stop asking* to make that folder the default:
+  from then on the menu offers *Bookmark tab to “Inbox”* (straight there) and *Bookmark tab to…* (the picker). Settings → bookmarks turns asking back on.
+  Grove makes no folder of its own; with no choice and no default it is Other Bookmarks. A tab with children, or a folder, becomes a bookmark *folder* of the same shape, so
   the hierarchy survives; several things at once keep together in a folder named for the moment ("Saved 2026-10-16 14:30"). Saving again changes
   nothing: pages already there are skipped. New tabs and notes are left out (notes live only in Grove folders).
 - **Open**: click opens it, or switches to the tab that already shows it (a dot marks pages open now; a setting turns the switching off).
@@ -198,7 +203,7 @@ as it happens. Choose a place with the chips (Grove, Toolbar, Menu, Other; Mobil
   loaded**: they cost nothing until you click one ("Open and load all" if you want them live). In a private window it opens in the private space only.
 - **Manage**: right-click for rename, change address, copy address, new folder inside, delete. Drag to reorder or move into a folder; drop a link from a page to
   add it where you drop. Delete, and an *Undo* bar brings back the last thing deleted, folder contents and place included. Arrow keys, Enter, F2, Delete, `/` and Esc work.
-- **Backups**: a JSON export (and so the automatic backups) carries the bookmarks too: all of them, only the Grove folder, or none (Settings → bookmarks).
+- **Backups**: a JSON export (and so the automatic backups) carries the bookmarks too: all of them, or none (Settings → bookmarks).
   Importing adds the ones you are missing and never removes or replaces any, so importing twice changes nothing. A panel-only export has no bookmarks.
 
 Unloaded tabs and bookmarks are different things: an unloaded tab is still a tab (Firefox keeps its entry, its history and its place in the strip), a bookmark
