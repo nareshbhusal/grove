@@ -6,9 +6,11 @@ import "../src/content/keys.js";
 const U = (n) => `https://${n}.test/`;
 const active = (t) => [...t.sim.tabs.values()].find((x) => x.windowId === t.winId && x.active);
 
-async function setup(urls = ["a", "b", "c"], { enable = true } = {}) {
+async function setup(urls = ["a", "b", "c"], { enable = true, guarded = false } = {}) {
   const t = await boot({ seed: urls.map((n, i) => ({ url: U(n), active: i === 0 })) });
   if (enable) await t.run("settings:set", { module: "vim", key: "enabled", value: true });
+  if (guarded) Object.assign(t.m.vim.guard, { same: 100, newAfterSequence: 100 });
+  else Object.assign(t.m.vim.guard, { same: 0, newAfterSequence: 0 }); // tests press keys faster than any person
   t.key = (n, action) => t.sim.fromPage(t.tabByUrl(U(n)).id, { type: "vim:key", action });
   t.tab = (n) => t.tabByUrl(U(n));
   return t;
@@ -18,11 +20,11 @@ async function setup(urls = ["a", "b", "c"], { enable = true } = {}) {
 
 test("vim keys are off until switched on; a paused page is told", async () => {
   const t = await setup(["a", "b"], { enable: false });
-  assert.deepEqual(await t.sim.fromPage(t.tab("a").id, { type: "vim:config" }), { active: false });
+  assert.deepEqual(await t.sim.fromPage(t.tab("a").id, { type: "vim:config" }), { active: false, scroll: true, hints: false, hintChars: "asdfghjklqwertyuiop" });
   assert.equal(await t.key("a", "next"), false);
   assert.equal(active(t).url, U("a"), "nothing happened");
   await t.run("settings:set", { module: "vim", key: "enabled", value: true });
-  assert.deepEqual(await t.sim.fromPage(t.tab("a").id, { type: "vim:config" }), { active: true });
+  assert.deepEqual(await t.sim.fromPage(t.tab("a").id, { type: "vim:config" }), { active: true, scroll: true, hints: true, hintChars: "asdfghjklqwertyuiop" });
   assert.ok(t.sim.pageMessages.some(([, m]) => m.type === "vim:active" && m.active === true), "open pages are told at once");
   t.sim.pageMessages.length = 0;
   await t.run("settings:set", { module: "vim", key: "enabled", value: false });
@@ -173,17 +175,18 @@ test("private windows work too", async () => {
 
 // ---- the key recogniser ----
 
-function keyboard({ active = true } = {}) {
+function keyboard({ active = true, scrolling = false } = {}) {
   const win = new EventTarget();
   win.document = { designMode: "off" };
   const sent = [];
-  globalThis.groveVimKeys.install(win, { active: () => active, send: (a) => sent.push(a) });
+  const scrolled = [];
+  globalThis.groveVimKeys.install(win, { active: () => active, send: (a) => sent.push(a), scrolling: () => scrolling, scroll: (a) => scrolled.push(a) });
   const press = (key, props = {}) => {
     const e = Object.assign(new Event("keydown", { cancelable: true }), { key, ctrlKey: false, altKey: false, metaKey: false, shiftKey: key !== key.toLowerCase(), repeat: false, ...props });
     win.dispatchEvent(e);
     return e;
   };
-  return { sent, press, win };
+  return { sent, scrolled, press, win };
 }
 const typeInto = (press, key, el) => press(key, { composedPath: () => [el] });
 
@@ -197,14 +200,14 @@ test("keys: sequences, single keys and what is swallowed", () => {
   press(">"); press(">");
   assert.deepEqual(sent, ["next", "prev", "prev", "new", "back", "forward", "up", "down"]);
   assert.equal(press("g").defaultPrevented, true, "the first key of a sequence is held back from the page");
-  assert.equal(press("x").defaultPrevented, false, "a key that means nothing goes through");
+  assert.equal(press("z").defaultPrevented, false, "a key that means nothing goes through");
   assert.equal(press("t").defaultPrevented, true);
 });
 
 test("keys: a half sequence is dropped by another key, and Shift alone does not break one", () => {
   const { sent, press } = keyboard();
-  press("g"); press("x"); press("t");
-  assert.deepEqual(sent, ["new"], "gx is nothing; the t after it is a plain t");
+  press("g"); press("z"); press("t");
+  assert.deepEqual(sent, ["new"], "gz is nothing; the t after it is a plain t");
   sent.length = 0;
   press("g"); press("Shift"); press("T");
   assert.deepEqual(sent, ["prev"]);
@@ -228,4 +231,151 @@ test("keys: ignored with Ctrl/Alt/Meta, while typing, when paused, and for held 
   const paused = keyboard({ active: false });
   assert.equal(paused.press("t").defaultPrevented, false);
   assert.deepEqual(paused.sent, []);
+});
+
+// ---- one press, one action ----
+
+test("a bare t arriving right after gt is dropped, and logged; a real t later is not", async () => {
+  const t = await setup(["a", "b"], { guarded: true });
+  await t.run("diag:clear");
+  await t.key("a", "next");
+  assert.equal(active(t).url, U("b"));
+  const tabsBefore = t.sim.tabs.size;
+  assert.equal(await t.key("b", "new"), false, "the t of gt");
+  assert.equal(t.sim.tabs.size, tabsBefore, "no new tab");
+  assert.ok((await t.run("diag:list", { kind: "vim" })).some((e) => /ignored: a bare t right after next/.test(e.result)));
+  await settle(150);
+  await t.key("b", "new");
+  await settle(50);
+  assert.equal(t.sim.tabs.size, tabsBefore + 1, "a t pressed on purpose a moment later works");
+});
+
+test("the same key sequence arriving twice moves one tab, not two", async () => {
+  const t = await setup(["a", "b", "c"], { guarded: true });
+  await t.key("a", "next");
+  assert.equal(await t.key("a", "next"), false);
+  assert.equal(active(t).url, U("b"));
+  await settle(150);
+  await t.key("b", "next");
+  assert.equal(active(t).url, U("c"), "pressed again on purpose: moves on");
+});
+
+test("the guard is per window", async () => {
+  const t = await setup(["a", "b"], { guarded: true });
+  const w2 = t.sim.addWindow();
+  await settle();
+  const o = await t.browser.tabs.create({ windowId: w2.id, url: U("other") });
+  await settle();
+  await t.key("a", "next");
+  assert.equal(await t.sim.fromPage(o.id, { type: "vim:key", action: "new" }), true, "another window is not affected");
+});
+
+test("keys: the rest of a taken press is swallowed too, and nothing else is", () => {
+  const { sent, press, win } = keyboard();
+  const rest = (type, key) => {
+    const e = Object.assign(new Event(type, { cancelable: true }), { key });
+    win.dispatchEvent(e);
+    return e;
+  };
+  press("g");
+  assert.equal(rest("keypress", "g").defaultPrevented, true);
+  assert.equal(rest("keyup", "g").defaultPrevented, true);
+  press("t");
+  assert.equal(rest("keypress", "t").defaultPrevented, true, "the t of gt does not reach the page");
+  assert.equal(rest("keyup", "t").defaultPrevented, true);
+  assert.equal(rest("keyup", "t").defaultPrevented, false, "once released, later events are the page's");
+  assert.deepEqual(sent, ["next"], "one gt, one action");
+  assert.equal(rest("keypress", "z").defaultPrevented, false);
+});
+
+// ---- x, and the scroll keys ----
+
+test("x closes the tab it was pressed in", async () => {
+  const t = await setup(["a", "b", "c"]);
+  assert.equal(await t.key("b", "close"), true);
+  await settle();
+  assert.equal(t.sim.byUrl(U("b")).length, 0);
+  assert.equal(t.sim.tabs.size, 2);
+  assert.equal(await t.run("vim:do", { action: "close", windowId: t.winId }), true, "from the sidebar: the active tab");
+  await settle();
+  assert.equal(t.sim.tabs.size, 1);
+});
+
+test("x twice in a moment closes one tab, not two", async () => {
+  const t = await setup(["a", "b", "c"], { guarded: true });
+  await t.key("a", "close");
+  assert.equal(await t.key("b", "close"), false);
+  await settle();
+  assert.equal(t.sim.tabs.size, 2);
+});
+
+test("the scroll keys are a setting, told to pages with the rest", async () => {
+  const t = await setup(["a"]);
+  assert.deepEqual(await t.sim.fromPage(t.tab("a").id, { type: "vim:config" }), { active: true, scroll: true, hints: true, hintChars: "asdfghjklqwertyuiop" });
+  t.sim.pageMessages.length = 0;
+  await t.run("settings:set", { module: "vim", key: "scrollKeys", value: false });
+  await settle();
+  assert.deepEqual(await t.sim.fromPage(t.tab("a").id, { type: "vim:config" }), { active: true, scroll: false, hints: true, hintChars: "asdfghjklqwertyuiop" });
+  assert.ok(t.sim.pageMessages.some(([, m]) => m.type === "vim:active" && m.scroll === false), "open pages hear it");
+});
+
+test("keys: j k d u gg G scroll; nothing of them reaches the background", () => {
+  const k = keyboard({ scrolling: true });
+  for (const key of ["j", "k", "d", "u", "G"]) k.press(key);
+  k.press("g"); k.press("g");
+  assert.deepEqual(k.scrolled, ["scrollDown", "scrollUp", "pageDown", "pageUp", "bottom", "top"]);
+  assert.deepEqual(k.sent, []);
+  k.press("g"); k.press("t");
+  assert.deepEqual(k.sent, ["next"], "gt still works beside gg");
+  assert.equal(k.press("j").defaultPrevented, true);
+});
+
+test("keys: with the scroll keys off they are the page's again, and gg is nothing", () => {
+  const k = keyboard({ scrolling: false });
+  for (const key of ["j", "k", "d", "u", "G"]) assert.equal(k.press(key).defaultPrevented, false, key);
+  k.press("g"); k.press("g");
+  assert.deepEqual(k.scrolled, []);
+  assert.deepEqual(k.sent, [], "gg did nothing; the second g only started a new sequence");
+  k.press("z"); // drops it
+  k.press("t");
+  assert.deepEqual(k.sent, ["new"]);
+});
+
+test("keys: holding j keeps scrolling; holding t or x acts once", () => {
+  const k = keyboard({ scrolling: true });
+  k.press("j"); k.press("j", { repeat: true }); k.press("j", { repeat: true });
+  assert.equal(k.scrolled.length, 3);
+  k.press("t"); const held = k.press("t", { repeat: true });
+  k.press("x"); k.press("x", { repeat: true });
+  assert.deepEqual(k.sent, ["new", "close"]);
+  assert.equal(held.defaultPrevented, true, "a held key that was taken is not handed to the page");
+});
+
+test("keys: typing in a field is never scrolled or switched", () => {
+  const k = keyboard({ scrolling: true });
+  typeInto(k.press, "j", { nodeType: 1, tagName: "INPUT", type: "search" });
+  typeInto(k.press, "d", { nodeType: 1, tagName: "TEXTAREA" });
+  assert.deepEqual(k.scrolled, []);
+});
+
+test("scrolling amounts: a little, half a screen, the ends", () => {
+  const calls = [];
+  const el = {
+    clientHeight: 800, scrollHeight: 5000,
+    scrollBy: (o) => calls.push(["by", o.top, o.behavior]),
+    scrollTo: (o) => calls.push(["to", o.top, o.behavior]),
+  };
+  const win = { document: { scrollingElement: {}, documentElement: {}, body: {} }, matchMedia: () => ({ matches: false }) };
+  const { scrollElement } = globalThis.groveVimKeys;
+  for (const a of ["scrollDown", "scrollUp", "pageDown", "pageUp", "top", "bottom"]) scrollElement(el, a, win);
+  assert.deepEqual(calls, [
+    ["by", 60, "auto"], ["by", -60, "auto"],
+    ["by", 400, "smooth"], ["by", -400, "smooth"],
+    ["to", 0, "smooth"], ["to", 5000, "smooth"],
+  ]);
+  calls.length = 0;
+  win.matchMedia = () => ({ matches: true }); // reduced motion: no animation
+  scrollElement(el, "pageDown", win);
+  scrollElement(el, "top", win);
+  assert.deepEqual(calls, [["by", 400, "auto"], ["to", 0, "auto"]]);
 });

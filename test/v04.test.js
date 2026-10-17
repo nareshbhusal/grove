@@ -215,7 +215,7 @@ test("context menus: selection, folder and branch items", async () => {
   const labels = (items) => items.filter((i) => !i.separator).map((i) => i.label ?? i.heading);
 
   const bulk = await t.run("ui:menu", { ids: [b, c] });
-  assert.deepEqual(labels(bulk), ["2 items selected", "Unload 2 tabs", "Move into new folder…", "Move to “Other”", "Close 2 tabs"]);
+  assert.deepEqual(labels(bulk), ["2 items selected", "Unload 2 tabs", "Move into new folder…", "Move to “Other”", "Bookmark 2 items", "Close 2 tabs"]);
   assert.deepEqual(bulk.find((i) => i.id === "sel-folder").args.nodeIds, [b, c]);
 
   await t.run("tabs:unload", { ids: [b], deep: false });

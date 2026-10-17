@@ -76,10 +76,10 @@ const pickPersistent = (n) => Object.fromEntries(KEEP.filter((k) => n[k] !== und
 
 export default {
   name: "io",
-  deps: ["tree", "panels", "settings", "notes", "containers"],
+  deps: ["tree", "panels", "settings", "notes", "containers", "bookmarks"],
 
   setup({ api, commands, store, bus, modules }) {
-    const { tree, panels, notes, containers } = modules;
+    const { tree, panels, notes, containers, bookmarks } = modules;
 
     async function collect(panelIds) {
       const nodes = T.withoutPrivate(tree.all()); // private tabs are never exported
@@ -130,6 +130,10 @@ export default {
         payload.rules = store.get("rules");
         payload.settings = store.get("settings");
         for (const r of payload.rules) if (r.containerId) used.add(r.containerId);
+      }
+      if (scope === "all") {
+        const marks = await bookmarks.snapshot(); // the browser's own bookmarks, as a copy (null when switched off)
+        if (marks) payload.bookmarks = marks;
       }
       used.delete("firefox-default");
       const known = await containers.listContainers();
@@ -332,8 +336,12 @@ export default {
       // Note texts go to their own storage; skip any note that normalisation had to drop.
       for (const [id, body] of bodies) if (tree.get(id)?.type === "note") await notes.setBody(id, body);
 
+      // Bookmarks are added where they are missing, never replaced or removed.
+      let marks = null;
+      if ((mode === "replace" || !panelId) && payload.bookmarks) marks = await bookmarks.restore(payload.bookmarks).catch(() => null);
+
       await store.flush();
-      return { panels: incoming.length, panelsCreated: created.length, tabs: tabCount, notes: noteCount, containersCreated, rulesSkipped, unreadable };
+      return { bookmarks: marks, panels: incoming.length, panelsCreated: created.length, tabs: tabCount, notes: noteCount, containersCreated, rulesSkipped, unreadable };
     });
 
     return { exports: { exportData, timestamp } };

@@ -295,3 +295,56 @@ test("a private window's view is not stamped on the window", async () => {
   await t.run("folder:create", { name: "F", windowId: t.pw.id });
   assert.ok(![...(t.sim.winValues?.keys() ?? [])].some((k) => k.startsWith(`${t.pw.id}:`)));
 });
+
+// ---- the first tab of a private window ----
+
+test("the first tab of a private window is picked up, even when Firefox announces it before the window", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const { win, tab } = await t.sim.addWindowTabFirst({ incognito: true });
+  await settle(50);
+  const id = t.m.tabs.nodeIdOf(tab.id);
+  assert.ok(id, "the tab has a node");
+  const node = t.m.tree.get(id);
+  assert.equal(node.private, true);
+  assert.equal(t.m.windows.isPrivatePanel(node.panelId), true, "in the private space, not a normal panel");
+  assert.equal(t.m.windows.isPrivate(win.id), true);
+  const ui = t.sim.connectUi({ windowId: win.id });
+  await settle(30);
+  const s = ui.last();
+  assert.equal(s.private, true);
+  assert.ok(s.nodes[id], "the private sidebar is sent it");
+  assert.equal(s.activeNodes[win.id], id, "and knows it is the one showing");
+  const normal = t.sim.connectUi({ windowId: t.winId });
+  await settle(30);
+  assert.ok(!normal.last().nodes[id], "a normal sidebar never sees it");
+});
+
+test("the first tab of a private window is picked up when the window comes first, too", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const w = t.sim.addWindow({ incognito: true });
+  await settle(20);
+  const tab = await t.browser.tabs.create({ windowId: w.id, url: "about:privatebrowsing" });
+  await settle(50);
+  const node = t.m.tree.get(t.m.tabs.nodeIdOf(tab.id));
+  assert.ok(node && t.m.windows.isPrivatePanel(node.panelId));
+});
+
+test("a window whose first tab was never announced adopts it once the window is known", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const { win, tab } = await t.sim.addWindowTabFirst({ incognito: true, announce: false });
+  await settle(50);
+  const id = t.m.tabs.nodeIdOf(tab.id);
+  assert.ok(id, "adopted");
+  assert.equal(t.m.windows.isPrivatePanel(t.m.tree.get(id).panelId), true);
+  assert.equal(t.m.tabs.activeNode(win.id), id);
+});
+
+test("the same for a normal window opened tab first", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const { tab } = await t.sim.addWindowTabFirst({ incognito: false, url: "https://n.test/" });
+  await settle(50);
+  const node = t.m.tree.get(t.m.tabs.nodeIdOf(tab.id));
+  assert.ok(node);
+  assert.equal(!!node.private, false);
+  assert.equal(t.m.windows.isPrivatePanel(node.panelId), false);
+});

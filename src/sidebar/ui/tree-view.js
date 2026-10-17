@@ -57,7 +57,7 @@ function systemIcon(url) {
   return null;
 }
 
-function favicon(node) {
+export function favicon(node) {
   const sys = !node.favIconUrl && systemIcon(node.url ?? "");
   if (sys) return icon(sys, { size: 14, cls: "favicon sys" });
   if (!node.favIconUrl) return tile(node.url);

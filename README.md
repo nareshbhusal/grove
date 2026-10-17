@@ -138,17 +138,73 @@ and are ignored while you type in a field or hold Ctrl, Alt or Meta.
 | `gt` | next tab |
 | `gT`, `gs` | previous tab |
 | `t` | new tab in the current panel (goes into the panel's container, like the + button) |
+| `x` | close the tab. Never the window: closing the last tab opens a new one in its place (and on an already empty last tab it does nothing). Ctrl+Q closes the window |
+| `r` | reload the tab (like Ctrl+R) |
+| `/` | search the tabs: opens Grove's search field, opening the sidebar first if it is closed |
+| `f` | label what can be clicked (see below) |
+| `j`, `k` | scroll down, up a little |
+| `d`, `u` | scroll half a screen down, up (smooth) |
+| `gg`, `G` | top, bottom of the page |
 | `H`, `L` | back, forward (the arrows next to the address bar) |
 | `<<`, `>>` | move the tab up, down among its siblings (Shift+, and Shift+. pressed twice); never across levels, children travel with it |
+
+`j k d u gg G` are the scroll keys: they scroll the page (or the box you are in; a page that scrolls an inner panel instead
+of itself is handled), and the list while the sidebar is focused. Holding `j`/`k`/`d`/`u` keeps scrolling. A separate setting turns
+them off, for pages or extensions that own those keys.
+
+**Link hints (`f`).** Every link, button, field and other clickable thing in view gets a short yellow label (fields are blue),
+sitting on its top-left corner. Type the label to click it: links open, buttons press, a text field gets the cursor (the letters you
+typed are not written into it). The labels are as short as they can be and none begins another, so a label is done on its last letter.
+While you type, labels that no longer match disappear; Backspace takes a letter back, Esc leaves, and a letter that matches nothing is ignored.
+**Shift with the last letter of a link's label opens it in a new tab as a child of the current one**, in the same container and behind it, so you can
+keep reading (Settings → vim can bring it to the front). Shift on a button or field just clicks it. Labels follow their elements as the page scrolls.
+Things hidden behind a dialog, disabled, invisible, or off the screen get no label; a wrapper a page made clickable gives way to the links
+inside it; frames of the same site are included. The letters, and whether `f` is on at all, are in Settings → vim.
+Not offered: `F` and multi-link modes: Shift on the last letter is the one gesture for "in a new tab".
 
 Next/previous follow the order of the sidebar, wrap around, step over what is folded away, and stay in the open
 panel (or folder). The settings say whether tabs that are not loaded count (they load when you arrive), and list
 sites where the keys stay out of the way (same patterns as container rules: `github.com`, `*.example.com`,
 `example.com/docs`, `=example.com`, `/regex/`; `#` starts a comment). The exceptions apply to pages, not to the sidebar.
 
+One press does one thing: the keypress and key-up of a key Grove took are kept from the page too, and the background drops
+a repeat of the same key sequence (or a bare `t` right after `gt`) that arrives within 100 ms. Every key, from a page or the sidebar, is
+recorded under Diagnostics (kind "vim", with which frame it came from and whether it was done or ignored).
+
+Using it beside Vimium (or another key extension): both listen to the same keys, and whichever runs first on a page takes them. Turning
+the other one off for these keys is the reliable fix; Vimium's "Excluded URLs and keys" can pass chosen keys through to the page
+(pattern `^https?://`, keys `gt gT gs t x r f / H L j k d u gg G << >>`; from memory, check Vimium's own help).
+
+`/` from a page opens the sidebar if needed; Firefox only lets an extension do that in answer to a key press, and I could not check that it
+counts a key pressed on a page, so if the sidebar stays shut, open it once (Alt+Shift+G) and `/` will find it. The sidebar also takes the
+keyboard focus only if Firefox allows that; otherwise click the field.
+
 Limits: Firefox does not run extension scripts on its own pages (about:…), on addons.mozilla.org, in the PDF viewer or in
 view-source, so the keys do nothing there unless the sidebar is focused. A `g` or `<` that begins a sequence is not passed
 to the page; use the exceptions for sites with their own shortcuts.
+
+### Bookmarks
+
+The bookmark button in the toolbar (or Ctrl+B in the sidebar) swaps the tab list for **Firefox's own bookmarks**: a viewer and manager,
+with no second copy. Everything you do there is done to the real bookmarks, and what changes elsewhere (the Library, Firefox Sync) shows up
+as it happens. Choose a place with the chips (Grove, Toolbar, Menu, Other; Mobile when it has something); searching looks in all of them.
+
+- **Save**: right-click a tab, a tab with children, a folder or a selection → *Bookmark…*. They go into a **Grove** folder inside Other
+  Bookmarks (made when first needed; the name is a setting). A tab with children, or a folder, becomes a bookmark *folder* of the same shape, so
+  the hierarchy survives; several things at once keep together in a folder named for the moment ("Saved 2026-10-16 14:30"). Saving again changes
+  nothing: pages already there are skipped. New tabs and notes are left out (notes live only in Grove folders).
+- **Open**: click opens it, or switches to the tab that already shows it (a dot marks pages open now; a setting turns the switching off).
+  Ctrl-click or middle-click opens it behind, Shift-click as a child of the current tab. **A folder opens as a Grove folder of saved tabs that are not
+  loaded**: they cost nothing until you click one ("Open and load all" if you want them live). In a private window it opens in the private space only.
+- **Manage**: right-click for rename, change address, copy address, new folder inside, delete. Drag to reorder or move into a folder; drop a link from a page to
+  add it where you drop. Delete, and an *Undo* bar brings back the last thing deleted, folder contents and place included. Arrow keys, Enter, F2, Delete, `/` and Esc work.
+- **Backups**: a JSON export (and so the automatic backups) carries the bookmarks too: all of them, only the Grove folder, or none (Settings → bookmarks).
+  Importing adds the ones you are missing and never removes or replaces any, so importing twice changes nothing. A panel-only export has no bookmarks.
+
+Unloaded tabs and bookmarks are different things: an unloaded tab is still a tab (Firefox keeps its entry, its history and its place in the strip), a bookmark
+is just a row of text. A bookmark folder opened as saved tabs sits in between: Grove's own rows, no Firefox tab, until you click.
+
+Limit: Grove shows favicons only for sites that are open in a tab (it does not fetch icons from the network); the others get a letter tile.
 
 ### Container rules
 

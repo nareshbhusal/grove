@@ -38,7 +38,26 @@ export function createFakeBrowser({ storageData = {} } = {}) {
   const downloadsList = new Map();
   let nextDl = 1;
 
+  // Bookmarks: the real tree has four built-in folders under one root. `final index` semantics on move.
+  const marks = new Map();
+  let nextMark = 1;
+  const markRoots = [["menu________", "Bookmarks Menu"], ["toolbar_____", "Bookmarks Toolbar"], ["unfiled_____", "Other Bookmarks"], ["mobile______", "Mobile Bookmarks"]];
+  marks.set("root________", { id: "root________", parentId: undefined, title: "", type: "folder", index: 0, dateAdded: 0, kids: [] });
+  markRoots.forEach(([id, title], i) => {
+    marks.set(id, { id, parentId: "root________", title, type: "folder", index: i, dateAdded: 0, kids: [] });
+    marks.get("root________").kids.push(id);
+  });
+  const markOut = (m, deep) => {
+    const { kids, ...rest } = m;
+    const out = { ...rest };
+    if (m.type === "folder" && deep) out.children = kids.map((k) => markOut(marks.get(k), true));
+    return out;
+  };
+  const reindexMarks = (pid) => marks.get(pid).kids.forEach((k, i) => (marks.get(k).index = i));
+  const dropMark = (id) => { const m = marks.get(id); for (const k of [...(m.kids ?? [])]) dropMark(k); marks.delete(id); };
+
   const E = {
+    bmCreated: ev(), bmRemoved: ev(), bmChanged: ev(), bmMoved: ev(),
     tabCreated: ev(), tabUpdated: ev(), tabRemoved: ev(), tabActivated: ev(), tabAttached: ev(),
     winCreated: ev(), winRemoved: ev(),
     beforeRequest: ev(), dlChanged: ev(), connect: ev(), message: ev(), command: ev(), navTarget: ev(),
@@ -222,6 +241,79 @@ export function createFakeBrowser({ storageData = {} } = {}) {
     webRequest: { onBeforeRequest: E.beforeRequest },
     webNavigation: { onCreatedNavigationTarget: E.navTarget },
 
+    bookmarks: {
+      onCreated: E.bmCreated, onRemoved: E.bmRemoved, onChanged: E.bmChanged, onMoved: E.bmMoved,
+      async getTree() { return [markOut(marks.get("root________"), true)]; },
+      async getSubTree(id) { if (!marks.has(id)) throw new Error(`Bookmark not found: ${id}`); return [markOut(marks.get(id), true)]; },
+      async get(id) { return [].concat(id).map((i) => { if (!marks.has(i)) throw new Error(`Bookmark not found: ${i}`); return markOut(marks.get(i), false); }); },
+      async getChildren(id) { if (!marks.has(id)) throw new Error(`Bookmark not found: ${id}`); return marks.get(id).kids.map((k) => markOut(marks.get(k), false)); },
+      async create({ parentId = "unfiled_____", title = "", url, index, type }) {
+        const parent = marks.get(parentId);
+        if (!parent || parent.type !== "folder") throw new Error(`Bookmark not found: ${parentId}`);
+        if (parentId === "root________") throw new Error("Cannot create bookmarks in the root");
+        if (url !== undefined) { try { new URL(url); } catch { throw new Error(`Invalid bookmark URL: ${url}`); } }
+        const isFolder = url === undefined && type !== "separator";
+        const m = { id: `bm${nextMark++}`, parentId, title, type: type === "separator" ? "separator" : isFolder ? "folder" : "bookmark", index: 0, dateAdded: Date.now(), kids: [] };
+        if (url !== undefined) m.url = url;
+        marks.set(m.id, m);
+        const at = index == null ? parent.kids.length : Math.max(0, Math.min(index, parent.kids.length));
+        parent.kids.splice(at, 0, m.id);
+        reindexMarks(parentId);
+        await E.bmCreated.dispatch(m.id, markOut(m, false));
+        return markOut(m, false);
+      },
+      async update(id, changes) {
+        const m = marks.get(id);
+        if (!m) throw new Error(`Bookmark not found: ${id}`);
+        if (changes.title !== undefined) m.title = changes.title;
+        if (changes.url !== undefined) m.url = changes.url;
+        await E.bmChanged.dispatch(id, changes);
+        return markOut(m, false);
+      },
+      async move(id, { parentId, index }) {
+        const m = marks.get(id);
+        if (!m) throw new Error(`Bookmark not found: ${id}`);
+        const from = marks.get(m.parentId);
+        from.kids.splice(from.kids.indexOf(id), 1);
+        reindexMarks(from.id);
+        const to = marks.get(parentId ?? m.parentId);
+        const at = index == null ? to.kids.length : Math.max(0, Math.min(index, to.kids.length));
+        to.kids.splice(at, 0, id);
+        m.parentId = to.id;
+        reindexMarks(to.id);
+        await E.bmMoved.dispatch(id, {});
+        return markOut(m, false);
+      },
+      async remove(id) {
+        const m = marks.get(id);
+        if (!m || !m.parentId || m.parentId === "root________") throw new Error("Cannot remove this bookmark");
+        if (m.kids.length) throw new Error("Cannot remove a non-empty folder; use removeTree");
+        const p = marks.get(m.parentId);
+        p.kids.splice(p.kids.indexOf(id), 1);
+        reindexMarks(p.id);
+        marks.delete(id);
+        await E.bmRemoved.dispatch(id, {});
+      },
+      async removeTree(id) {
+        const m = marks.get(id);
+        if (!m || !m.parentId || m.parentId === "root________") throw new Error("Cannot remove this folder");
+        const p = marks.get(m.parentId);
+        p.kids.splice(p.kids.indexOf(id), 1);
+        reindexMarks(p.id);
+        dropMark(id);
+        await E.bmRemoved.dispatch(id, {});
+      },
+    },
+
+    // Opening needs a key press or click in a real Firefox; the fake can be told to refuse.
+    sidebarAction: {
+      async open() {
+        if (sim.sidebarRefuses) throw new Error("sidebarAction.open may only be called from a user input handler");
+        sim.sidebarOpens++;
+        sim.onSidebarOpen?.();
+      },
+    },
+
     runtime: {
       onConnect: E.connect,
       onMessage: E.message,
@@ -291,7 +383,23 @@ export function createFakeBrowser({ storageData = {} } = {}) {
     searches: [],
     captures: [], // captureTab calls
     captureFails: false,
+    // Put bookmarks in without events: [{ title, url }] or [{ title, children: [...] }] into a folder.
+    seedBookmarks(parentId, list) {
+      const add = (pid, items) => items.forEach((it) => {
+        const m = { id: `bm${nextMark++}`, parentId: pid, title: it.title ?? "", type: it.children ? "folder" : "bookmark", index: 0, dateAdded: 1, kids: [] };
+        if (it.url) m.url = it.url;
+        marks.set(m.id, m);
+        marks.get(pid).kids.push(m.id);
+        reindexMarks(pid);
+        if (it.children) add(m.id, it.children);
+      });
+      add(parentId, list);
+    },
+    bookmarkTree() { return markOut(marks.get("root________"), true); },
     history: [], // goBack / goForward calls
+    sidebarOpens: 0,
+    sidebarRefuses: false,
+    onSidebarOpen: null,
     pageMessages: [], // tabs.sendMessage calls
     // A message from a content script in a tab, the way the background receives it.
     async fromPage(tabId, msg) {
@@ -320,6 +428,23 @@ export function createFakeBrowser({ storageData = {} } = {}) {
       wins.set(w.id, w);
       E.winCreated.fire({ ...w });
       return w;
+    },
+
+    // How Firefox can open a window: its first tab is announced before the window is.
+    // announce: false = the tab only (the window event never comes); "tab" = tab event, then the window event.
+    async addWindowTabFirst({ incognito = false, url = "about:privatebrowsing", announce = "tab" } = {}) {
+      const w = { id: nextWin++, focused: true, incognito };
+      wins.set(w.id, w);
+      const tab = {
+        id: nextTab++, windowId: w.id, index: 0, url, title: url, active: true, pinned: false, hidden: false, discarded: false,
+        audible: false, status: "complete", cookieStoreId: incognito ? "firefox-private" : "firefox-default", incognito, width: 1200, height: 800,
+        mutedInfo: { muted: false },
+      };
+      tabs.set(tab.id, tab);
+      if (announce) E.tabCreated.fire(clone(tab));
+      await settle(5);
+      E.winCreated.fire({ ...w });
+      return { win: w, tab };
     },
 
     // Simulate tabs that exist before the extension starts.

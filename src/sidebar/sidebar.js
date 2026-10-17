@@ -11,6 +11,7 @@ import { createSearchBar } from "./ui/search-bar.js";
 import { askText } from "./ui/dialog.js";
 import { icon } from "./ui/icons.js";
 import { createHover } from "./ui/hover.js";
+import { createBookmarksView } from "./ui/bookmarks-view.js";
 
 let windowId = null;
 let incognito = false;
@@ -55,6 +56,7 @@ const hover = createHover({ root: $("tree"), card: $("preview"), getState, getWi
 // Collapsed until asked for. The list filters itself; the bar only holds the field.
 const search = createSearchBar({
   root: $("searchbar"),
+  redirect: () => { if (!marks.isOpen()) return false; marks.focusSearch(); return true; },
   onChange: () => tree.render(),
   onMove: (d) => tree.moveCursor(d),
   onEnter: () => tree.activateCursor(),
@@ -63,6 +65,17 @@ const search = createSearchBar({
     tree.render();
   },
 });
+
+// Firefox's bookmarks, in place of the tab list while open (button in the toolbar, or Ctrl+B in here).
+const marks = createBookmarksView({
+  root: $("marks"),
+  getState,
+  getWindowId,
+  showMenu: (e, items) => menu.show(e, items),
+  onToggle: (on) => $("toolbar").querySelector(".marks-toggle")?.setAttribute("aria-pressed", String(on)),
+});
+// Choosing a panel is going back to your tabs.
+$("panelbar").addEventListener("click", () => marks.hide());
 
 // A quiet reminder that several rows are selected, with a way out.
 function updateSelectionBar(count) {
@@ -130,6 +143,7 @@ function buildToolbar() {
       h("button", { class: "tool search-toggle", title: "Search this view (Ctrl+F)", "aria-label": "Search", "aria-pressed": String(search.isOpen()), onclick: () => search.toggle() }, icon("search", { size: 18 })),
       toolButton("collapseAll", "Collapse all", () => run("tree:collapseAll", { panelId: view().panelId })),
       toolButton("expandAll", "Expand all", () => run("tree:expandAll", { panelId: view().panelId })),
+      h("button", { class: "tool marks-toggle", title: "Bookmarks", "aria-label": "Bookmarks", "aria-pressed": String(marks.isOpen()), onclick: () => marks.toggle() }, icon("bookmark", { size: 18 })),
       toolButton("gear", "Settings, rules and export", () => browser.runtime.openOptionsPage()),
     ].filter(Boolean)
   );
@@ -150,9 +164,14 @@ function renderAll() {
   search.setScope(v.folderId ? `in ${placeName()} and subfolders` : `in ${placeName()}`);
   tree.render();
   hover.refresh();
+  marks.redraw();
 }
 
 async function main() {
+  document.addEventListener("keydown", (e) => {
+    // Ctrl/Cmd+B: the bookmarks, as in Firefox's own sidebar shortcut.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "b") { e.preventDefault(); marks.toggle(); }
+  });
   const win = await browser.windows.getCurrent();
   windowId = win.id;
   incognito = !!win.incognito;
@@ -166,11 +185,22 @@ async function main() {
     // leaves it open: that is the point of having it beside the tabs.
     if (editor.isOpen() && !state.nodes[editor.currentId()]) editor.close();
     renderAll();
-  }, { windowId });
+  }, {
+    windowId,
+    // "/" pressed on a page: take the keyboard over to the search field.
+    onSearch: () => {
+      window.focus();
+      marks.hide();
+      search.show();
+    },
+    onBookmarks: () => marks.changed(),
+  });
   // The same keys as on a page (gt, t, H, ...), while the sidebar has the focus.
   globalThis.groveVimKeys?.install(window, {
     active: () => !!state?.settings?.vim?.enabled,
-    send: (action) => run("vim:do", { action, windowId }),
+    scrolling: () => state?.settings?.vim?.scrollKeys !== false,
+    scroll: (action) => globalThis.groveVimKeys.scrollElement(marks.isOpen() ? marks.el : $("tree"), action, window), // the list is what scrolls here
+    send: (action) => (action === "search" ? (marks.isOpen() ? marks.focusSearch() : search.show()) : run("vim:do", { action, windowId })),
   });
 }
 

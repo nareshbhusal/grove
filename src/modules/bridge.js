@@ -23,6 +23,8 @@ export default {
     // port -> { private }. A port is normal until it says which window it belongs to
     // and the background confirms that window is private.
     const ports = new Map();
+    // windowId -> until when a sidebar that connects there should open its search
+    const wantsSearch = new Map();
 
     // One state per audience. Private tabs exist only in memory and only ever go to the
     // sidebar of a private window; everything else gets the same state it always did.
@@ -77,6 +79,20 @@ export default {
     }
     const schedulePush = debounce(push, 30);
 
+    // Bookmarks are the browser's, shared by every window (private ones too), so the notice goes to all.
+    bus.on("bookmarks:changed", () => {
+      for (const p of [...ports.keys()]) {
+        try { p.postMessage({ type: "bookmarks" }); } catch { ports.delete(p); }
+      }
+    });
+    // A short message for one window's sidebar (it shows as a toast).
+    function notify(windowId, text) {
+      for (const [p, s] of [...ports]) {
+        if (s.windowId !== windowId) continue;
+        try { p.postMessage({ type: "toast", text }); } catch { ports.delete(p); }
+      }
+    }
+
     for (const ev of [
       "tree:changed", "panel:changed", "panel:deleted", "window:viewChanged",
       "tab:activated", "settings:changed", "store:changed", "containers:changed",
@@ -97,9 +113,16 @@ export default {
         if (msg?.type !== "hello") return;
         // Never trust the page's word for it: ask the browser whether that window is private.
         if (msg.windowId != null) {
-          scope.private = await api.windows.get(msg.windowId).then((w) => !!w.incognito, () => false);
+          const win = await api.windows.get(msg.windowId).then((w) => w, () => null);
+          scope.private = !!win?.incognito;
+          if (win) scope.windowId = msg.windowId;
         }
-        send();
+        await send();
+        // A sidebar that was opened in order to search: it opens the search as soon as it can.
+        if (scope.windowId != null && (wantsSearch.get(scope.windowId) ?? 0) > Date.now()) {
+          wantsSearch.delete(scope.windowId);
+          port.postMessage({ type: "search" });
+        }
       });
       send();
     };
@@ -127,6 +150,24 @@ export default {
       return items;
     });
 
+    // The "/" key: open the search field in this window's sidebar, opening the sidebar first if it is closed.
+    commands.register("ui:search", async ({ windowId }) => {
+      const here = [...ports].filter(([, s]) => s.windowId === windowId);
+      if (here.length) {
+        for (const [p] of here) p.postMessage({ type: "search" });
+        return true;
+      }
+      wantsSearch.set(windowId, Date.now() + 5000);
+      try {
+        await api.sidebarAction.open(); // Firefox only allows this in answer to a key press or click
+        return true;
+      } catch (err) {
+        wantsSearch.delete(windowId);
+        log.warn("could not open the sidebar to search", err);
+        return false;
+      }
+    });
+
     commands.register("ui:state", () => buildState());
     commands.register("commands:list", () => commands.list());
 
@@ -142,7 +183,7 @@ export default {
     api.commands?.onCommand.addListener(onCommand);
 
     return {
-      exports: { push, buildState },
+      exports: { push, buildState, notify },
       teardown() {
         api.runtime.onConnect.removeListener(onConnect);
         api.runtime.onMessage.removeListener(onMessage);

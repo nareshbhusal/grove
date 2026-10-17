@@ -14,6 +14,7 @@
 //
 // Events: window:viewChanged { windowId, panelId, folderId, previous, changed }
 //         window:closed { windowId, private }
+//         window:opened { windowId, private }   a new window is known (its first tab may have been seen before this)
 
 const VIEW_KEY = "grove:view";
 const LEGACY_PANEL_KEY = "grove:panel"; // v0.1 stored only the panel id
@@ -63,16 +64,19 @@ export default {
       lastFolder.get(windowId).set(view.panelId, view.folderId);
     }
 
+    // Nothing about a private window is remembered: it starts on its first private panel.
+    // Safe to call again: a window already known to be private is left as it is.
+    function ensurePrivate(windowId) {
+      if (privateWindows.has(windowId)) return;
+      privateWindows.add(windowId);
+      ensurePrivatePanel();
+      const view = sanitize(null, true);
+      views.set(windowId, view);
+      remember(windowId, view);
+    }
+
     async function restore(windowId, priv = false) {
-      if (priv) {
-        // Nothing about a private window is remembered: it starts on its first private panel.
-        privateWindows.add(windowId);
-        ensurePrivatePanel();
-        const view = sanitize(null, true);
-        views.set(windowId, view);
-        remember(windowId, view);
-        return;
-      }
+      if (priv) return ensurePrivate(windowId);
       let saved = null;
       try {
         saved = await api.sessions.getWindowValue(windowId, VIEW_KEY);
@@ -123,7 +127,12 @@ export default {
 
     for (const w of await api.windows.getAll()) await restore(w.id, !!w.incognito);
 
-    const onCreated = (w) => restore(w.id, !!w.incognito);
+    // Firefox may announce a window's first tab before the window itself (tabs.js then calls
+    // ensurePrivate for it); either way, once the window is announced tabs already in it are adopted.
+    const onCreated = async (w) => {
+      await restore(w.id, !!w.incognito);
+      await bus.emit("window:opened", { windowId: w.id, private: !!w.incognito });
+    };
     const onRemoved = (id) => {
       const priv = isPrivate(id);
       views.delete(id);
@@ -139,6 +148,7 @@ export default {
         getView,
         setView,
         isPrivate,
+        ensurePrivate,
         isPrivatePanel,
         panelsFor: panels,
         getActive: (windowId) => getView(windowId).panelId,

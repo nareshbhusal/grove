@@ -259,7 +259,7 @@ function renderData() {
     if (!f) return;
     try {
       const r = await cmd("io:import", { text: await f.text(), mode: mode.value });
-      toast(`Imported ${r.tabs} tabs${r.notes ? ` and ${r.notes} notes` : ""} into ${r.panels} panel(s)${r.panelsCreated ? ` (${r.panelsCreated} new)` : ""}${r.containersCreated ? `, and created ${r.containersCreated} container(s)` : ""}.${r.unreadable ? ` ${r.unreadable} damaged entr${r.unreadable === 1 ? "y was" : "ies were"} skipped.` : ""} Open them from the sidebar.`);
+      toast(`Imported ${r.tabs} tabs${r.notes ? ` and ${r.notes} notes` : ""} into ${r.panels} panel(s)${r.panelsCreated ? ` (${r.panelsCreated} new)` : ""}${r.containersCreated ? `, and created ${r.containersCreated} container(s)` : ""}.${r.unreadable ? ` ${r.unreadable} damaged entr${r.unreadable === 1 ? "y was" : "ies were"} skipped.` : ""}${r.bookmarks ? ` Bookmarks: ${r.bookmarks.saved} added${r.bookmarks.duplicates ? `, ${r.bookmarks.duplicates} already there` : ""}.` : ""} Open them from the sidebar.`);
     } catch (e) {
       toast(e.message);
     }
@@ -268,7 +268,7 @@ function renderData() {
 
   const status = h("p", { class: "hint", id: "backup-status", "aria-live": "polite" });
   body.replaceChildren(
-    h("p", { class: "hint" }, "Imported tabs appear greyed out in the tree; click one to open it. Nothing opens automatically."),
+    h("p", { class: "hint" }, "Imported tabs appear greyed out in the tree; click one to open it. Nothing opens automatically. A JSON export also carries your bookmarks (Settings → bookmarks says how much); importing adds the ones you are missing and never removes or replaces any."),
     h("div", { class: "grid", style: { gridTemplateColumns: "1fr" } }, scope),
     h("div", { class: "row-actions" },
       h("button", { class: "primary", onclick: () => exportAs("json") }, "Export JSON (backup)"),

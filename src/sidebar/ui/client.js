@@ -1,7 +1,8 @@
 // Thin client for the background bridge. Shared by the sidebar and options page.
 
 // `windowId` lets the background tell a private window's sidebar from the others.
-export function connect(onState, { windowId = null } = {}) {
+// `onSearch` is called when the "/" key was pressed on a page and the search should open here.
+export function connect(onState, { windowId = null, onSearch = () => {}, onBookmarks = () => {} } = {}) {
   let port = null;
   let state = null;
   let closed = false;
@@ -13,7 +14,9 @@ export function connect(onState, { windowId = null } = {}) {
       if (msg?.type === "state") {
         state = msg.state;
         onState(state);
-      }
+      } else if (msg?.type === "search") onSearch();
+      else if (msg?.type === "bookmarks") onBookmarks();
+      else if (msg?.type === "toast") toast(msg.text);
     });
     port.onDisconnect.addListener(() => {
       // Background restarted (extension update / crash): reconnect.

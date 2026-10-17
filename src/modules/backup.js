@@ -235,6 +235,7 @@ export default {
     };
     bus.on("store:saved", onData);
     bus.on("notes:changed", onData);
+    bus.on("bookmarks:changed", onData);
     bus.on("settings:changed", ({ module }) => module === "backup" && configure());
     configure();
 

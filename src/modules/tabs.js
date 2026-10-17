@@ -256,6 +256,9 @@ export default {
     }
 
     async function createNode(tab, claim) {
+      // The tab itself says its window is private, even if Firefox has not announced the window yet:
+      // it must be placed in the private space, not a normal panel the private sidebar never shows.
+      if (tab.incognito) windows.ensurePrivate(tab.windowId);
       let placement;
       let signal;
       let opener = null;
@@ -480,6 +483,25 @@ export default {
     };
 
     api.tabs.onCreated.addListener(onCreated);
+
+    // A new window: take in any tab it already has that onCreated did not tell us about
+    // (the first tab of a window is not always announced), and note which one is showing.
+    const onWindowOpened = async ({ windowId }) => {
+      const here = await api.tabs.query({ windowId }).catch(() => []);
+      for (const tab of here) {
+        if (nodeByTab.has(tab.id) || pending.has(tab.id)) continue;
+        const work = ingest(tab).then(async (nodeId) => {
+          pending.delete(tab.id);
+          wake(tab.id);
+          await bus.emit("tab:created", { tab, nodeId, claimed: false });
+        });
+        pending.set(tab.id, work);
+        await work;
+      }
+      const shown = here.find((tab) => tab.active);
+      if (shown && !activeByWindow.has(windowId)) await onActivated({ tabId: shown.id, windowId });
+    };
+    bus.on("window:opened", onWindowOpened);
     api.tabs.onUpdated.addListener(onUpdated);
     api.tabs.onRemoved.addListener(onRemoved);
     api.tabs.onActivated.addListener(onActivated);
@@ -784,6 +806,7 @@ export default {
         clearInterval(pruneTimer);
         globalThis.removeEventListener?.("online", onOnline);
         api.tabs.onCreated.removeListener(onCreated);
+        bus.off("window:opened", onWindowOpened);
         api.tabs.onUpdated.removeListener(onUpdated);
         api.tabs.onRemoved.removeListener(onRemoved);
         api.tabs.onActivated.removeListener(onActivated);

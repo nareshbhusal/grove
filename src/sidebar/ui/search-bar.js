@@ -10,7 +10,7 @@
 import { h } from "./client.js";
 import { icon } from "./icons.js";
 
-export function createSearchBar({ root, onChange, onMove, onEnter, onToggle = () => {} }) {
+export function createSearchBar({ root, onChange, onMove, onEnter, onToggle = () => {}, redirect = () => false }) {
   let open = false;
   let scope = "";
 
@@ -43,6 +43,8 @@ export function createSearchBar({ root, onChange, onMove, onEnter, onToggle = ()
   // Ctrl/Cmd+F anywhere in the sidebar, or "/" when you are not typing somewhere.
   document.addEventListener("keydown", (e) => {
     const typing = /^(input|textarea|select)$/i.test(e.target?.tagName ?? "") || e.target?.isContentEditable;
+    const wantsFind = ((e.key === "f" || e.key === "F") && (e.ctrlKey || e.metaKey) && !e.altKey) || (e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey);
+    if (wantsFind && redirect()) { e.preventDefault(); return; } // something else (the bookmark view) has its own search
     if ((e.key === "f" || e.key === "F") && (e.ctrlKey || e.metaKey) && !e.altKey) { e.preventDefault(); api.show(); }
     else if (e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); api.show(); }
   });

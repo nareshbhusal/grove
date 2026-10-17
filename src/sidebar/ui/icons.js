@@ -32,6 +32,7 @@ const ICONS = {
     stroke: true,
     shapes: [["path", { d: "M4 2.5h5l3 3v8H4z" }], ["path", { d: "M9 2.5v3h3" }], ["path", { d: "M8 7.8v3.4M6.3 9.5h3.4" }]],
   },
+  bookmark: { stroke: true, shapes: [["path", { d: "M4.5 2.5h7v11L8 10.6l-3.5 2.9z" }]] },
   back: { stroke: true, shapes: [["path", { d: "M9.5 3.5 5 8l4.5 4.5" }]] },
   download: { stroke: true, shapes: [["path", { d: "M8 3v7M5 7.5l3 3 3-3M3.5 13h9" }]] },
   note: {
