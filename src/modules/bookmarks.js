@@ -22,7 +22,8 @@
 //   bookmarks:create   { parentId, title, url?, index? }   -> id
 //   bookmarks:update   { id, title?, url? }
 //   bookmarks:move     { id, parentId, index? }            index is where it ends up among the new siblings
-//   bookmarks:remove   { id }                              -> true; bookmarks:undo brings the last one back
+//   bookmarks:moveMany { ids, parentId, index? }           -> { moved, skipped } (in the order given, together)
+//   bookmarks:remove   { id } or { ids }                   -> true; bookmarks:undo brings the last delete back, all of it
 //   bookmarks:undo     {}                                  -> true | false
 // Events: bookmarks:changed
 // Used by io.js: snapshot(), restore(snapshot)
@@ -181,25 +182,66 @@ export default {
       return true;
     }, { title: "Move bookmark" });
 
-    // Deleting a folder takes everything in it: keep what went so it can come back.
+    // Several at once: they keep their order and land together, before the first sibling at or after `index`
+    // that is not itself being moved (no index: at the end). One that cannot go (a built-in folder, a folder into
+    // itself) is left where it is.
+    commands.register("bookmarks:moveMany", async ({ ids = [], parentId, index = null }) => {
+      const want = [...new Set(ids)];
+      const dest = await folderOk(parentId);
+      if (!dest) return { moved: 0, skipped: want.length };
+      const inside = async (id) => {
+        for (let p = dest.id; p && p !== B.ROOT; p = (await native().get(p).catch(() => [null]))[0]?.parentId) if (p === id) return true;
+        return false;
+      };
+      const movable = [];
+      for (const id of want) {
+        const [n] = await native().get(id).catch(() => []);
+        if (n && n.parentId && n.parentId !== B.ROOT && !(await inside(id))) movable.push(id);
+      }
+      const set = new Set(movable);
+      const kids = await native().getChildren(dest.id);
+      const anchor = index == null ? null : kids.slice(Math.max(0, index)).find((k) => !set.has(k.id))?.id ?? null;
+      for (const id of movable) {
+        const rest = (await native().getChildren(dest.id)).filter((k) => k.id !== id);
+        const at = anchor ? rest.findIndex((k) => k.id === anchor) : rest.length;
+        await native().move(id, { parentId: dest.id, index: at < 0 ? rest.length : at });
+      }
+      return { moved: movable.length, skipped: want.length - movable.length };
+    }, { title: "Move bookmarks" });
+
+    // Deleting takes everything in a folder: keep what went so it can come back (the last delete, all of it).
     let removed = null;
-    commands.register("bookmarks:remove", async ({ id }) => {
-      const [node] = await native().getSubTree(id);
-      if (!node || !node.parentId || node.parentId === B.ROOT) return false; // a built-in folder cannot go
-      removed = { parentId: node.parentId, index: node.index, item: B.toSnapshotItems([B.simplify(node)])[0], title: node.title };
-      if (node.type === "folder") await native().removeTree(id);
-      else await native().remove(id);
+    commands.register("bookmarks:remove", async ({ id, ids = null }) => {
+      const list = [...new Set(ids ?? [id])].filter(Boolean);
+      const nodes = [];
+      for (const one of list) {
+        const [node] = await native().getSubTree(one).catch(() => []);
+        if (node && node.parentId && node.parentId !== B.ROOT) nodes.push(node); // a built-in folder cannot go
+      }
+      // What is inside another chosen folder goes with it, once.
+      const chosen = new Set(nodes.map((n) => n.id));
+      const inChosen = (n) => { for (let p = n.parentId; p; p = nodes.find((x) => x.id === p)?.parentId) if (chosen.has(p)) return true; return false; };
+      const top = nodes.filter((n) => !inChosen(n));
+      if (!top.length) return false;
+      removed = top.map((n) => ({ parentId: n.parentId, index: n.index, item: B.toSnapshotItems([B.simplify(n)])[0], title: n.title })).filter((r) => r.item);
+      for (const n of top) {
+        if (n.type === "folder") await native().removeTree(n.id);
+        else await native().remove(n.id);
+      }
       return true;
     }, { title: "Delete bookmark" });
 
     commands.register("bookmarks:undo", async () => {
-      if (!removed?.item) return false;
-      const { parentId, index, item } = removed;
+      if (!removed?.length) return false;
+      // Back in the order they were, so each lands at the place it left.
+      const back = [...removed].sort((a, b) => String(a.parentId).localeCompare(String(b.parentId)) || a.index - b.index);
       removed = null;
-      try {
-        await make(parentId, [item], { merge: false, index });
-      } catch {
-        await make(B.OTHER, [item], { merge: false }); // its folder is gone too
+      for (const { parentId, index, item } of back) {
+        try {
+          await make(parentId, [item], { merge: false, index });
+        } catch {
+          await make(B.OTHER, [item], { merge: false }); // its folder is gone too
+        }
       }
       return true;
     }, { title: "Undo delete" });

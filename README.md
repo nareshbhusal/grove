@@ -141,7 +141,7 @@ and are ignored while you type in a field or hold Ctrl, Alt or Meta.
 | `t` | new tab in the current panel (goes into the panel's container, like the + button) |
 | `x` | close the tab. Never the window: closing the last tab opens a new one in its place (and on an already empty last tab it does nothing). Ctrl+Q closes the window |
 | `r` | reload the tab (like Ctrl+R) |
-| `/` | search the tabs, from wherever you are: on a page it opens Grove's search field (opening the sidebar first if it is closed) and hands it the keyboard; in the sidebar it focuses the field |
+| `/` | search, wherever focus is: **on a page**, find in the page (a bar at the bottom; see below); **in the sidebar**, Grove's own tab search (the field opens, or the bookmark search while bookmarks are showing) |
 | `f` | label what can be clicked (see below) |
 | `j`, `k` | scroll down, up a little (a single press glides; holding repeats instantly so it keeps up) |
 | `d`, `u` | scroll half a screen down, up (smooth) |
@@ -176,10 +176,13 @@ Using it beside Vimium (or another key extension): both listen to the same keys,
 the other one off for these keys is the reliable fix; Vimium's "Excluded URLs and keys" can pass chosen keys through to the page
 (pattern `^https?://`, keys `gt gT gs t x r f / H L j k d u gg G << >>`; from memory, check Vimium's own help).
 
-`/` from a page opens the sidebar if needed; Firefox only lets an extension do that in answer to a key press, and I could not check that it
-counts a key pressed on a page, so if the sidebar stays shut, open it once (Alt+Shift+G) and `/` will find it. The sidebar also takes the
-keyboard focus only if Firefox allows that (Grove asks again while the sidebar is already open, which is what moves focus into it);
-otherwise click the field.
+**Find on the page (`/`).** On a web page `/` opens a small bar at the bottom; matches light up as you type (mint, the current one violet; the bar shows
+"3 / 17"). It ignores case unless you type a capital letter, treats any run of whitespace as one space, and finds text across tags
+(`foo <b>bar</b>`). Only text you can see counts, and text inside input fields is not searched. **Enter** keeps the matches and gives the page back; then
+**`n` / `N`** step to the next / previous match (wrapping round) until **Esc** clears them. While the bar is open **Up/Down** step through the matches, and
+Esc or Backspace on an empty box close it. The page never sees what you type in the bar, and `n` / `N` are left to the page whenever nothing is being searched.
+It searches the frame you are in. In the sidebar `/` is Grove's own search instead, so the same key searches whichever of the two has the focus.
+(Highlighting uses Firefox 140's CSS Custom Highlight API; if a page blocks it, the current match is selected instead.)
 
 Limits: Firefox does not run extension scripts on its own pages (about:…), on addons.mozilla.org, in the PDF viewer or in
 view-source, so the keys do nothing there unless the sidebar is focused. A `g` or `<` that begins a sequence is not passed
@@ -199,8 +202,12 @@ folder, which no extension can delete); searching looks in all of them.
   the hierarchy survives; several things at once keep together in a folder named for the moment ("Saved 2026-10-16 14:30"). Saving again changes
   nothing: pages already there are skipped. New tabs and notes are left out (notes live only in Grove folders).
 - **Open**: click opens it, or switches to the tab that already shows it (a dot marks pages open now; a setting turns the switching off).
-  Ctrl-click or middle-click opens it behind, Shift-click as a child of the current tab. **A folder opens as a Grove folder of saved tabs that are not
+  Middle-click (or Ctrl+Enter) opens it behind, Shift+Enter as a child of the current tab. **A folder opens as a Grove folder of saved tabs that are not
   loaded**: they cost nothing until you click one ("Open and load all" if you want them live). In a private window it opens in the private space only.
+- **Select several**, as with tabs: Ctrl/Cmd-click toggles a row, Shift-click selects a range (Shift+Up/Down, Space and Ctrl+A do the same from the keyboard);
+  a plain click or Esc clears it. Drag any selected row to move them all together; right-click for *open them all* (behind, or as children of this tab),
+  *move to…* (the folder picker), *copy addresses* and *delete* (one Undo brings all of them back). A selected folder stands for what is inside it. Opening behind /
+  as a child moved to middle-click, the menu, and Ctrl+Enter / Shift+Enter, since Ctrl- and Shift-click now select.
 - **Manage**: right-click for rename, change address, copy address, new folder inside, delete. Drag to reorder or move into a folder; drop a link from a page to
   add it where you drop. Delete, and an *Undo* bar brings back the last thing deleted, folder contents and place included. Arrow keys, Enter, F2, Delete, `/` and Esc work.
 - **Backups**: a JSON export (and so the automatic backups) carries the bookmarks too: all of them, or none (Settings → bookmarks).
@@ -342,7 +349,7 @@ Firefox from flashing the downloads button when a save starts; if the panel open
 
 ### Search
 
-The magnifier in the toolbar (or Ctrl+F, or `/` when you are not typing) opens a search field;
+The magnifier in the toolbar (or Ctrl+F, or `/` while the sidebar has the focus and you are not typing) opens a search field;
 it stays out of the way until then. What it searches depends on where you are: the whole panel,
 or, inside an open folder, that folder with everything under it, subfolders included and
 collapsed branches too. A tab matches on its title, a title you gave it, or its address

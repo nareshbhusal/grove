@@ -4,7 +4,7 @@
 //   gt  next tab            gT, gs  previous tab      (in the order of the sidebar)
 //   t   new tab in the current panel (honours the panel's container)
 //   x   close the tab (never the window: the last tab is replaced by a new one)     r   reload
-//   /   search the tabs (opens Grove's sidebar if it is closed)
+//   /   search: on a page a find bar (content/find.js, handled right there); in the sidebar Grove's tab search
 //   H   back                L       forward
 //   <<  move the tab up     >>      move it down      (among its siblings, never across levels)
 //   j k d u gg G  scroll the page (done by src/content/keys.js on the page itself; a setting turns them off)
@@ -31,7 +31,7 @@ export default {
     settings.register("vim", {
       enabled: {
         type: "boolean",
-        label: "Vim-style keys: gt / gs / gT next and previous tab, t new tab, x close tab, r reload, / search, H / L back and forward, << and >> move the tab up and down. Works on pages and while the sidebar is focused. Untick to pause",
+        label: "Vim-style keys: gt / gs / gT next and previous tab, t new tab, x close tab, r reload, / search (find in the page, or Grove's search in the sidebar), H / L back and forward, << and >> move the tab up and down. Works on pages and while the sidebar is focused. Untick to pause",
         default: false,
       },
       scrollKeys: {

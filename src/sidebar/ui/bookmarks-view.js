@@ -3,14 +3,18 @@
 // elsewhere (Firefox's own library, sync, another tool) show up here as they happen.
 //
 //   click          open it (switches to the tab if it is already open)
-//   Ctrl-click, middle-click   open it behind the current tab      Shift-click   open it as a child of the current tab
-//   right-click    open, rename, change the address, delete; a folder opens as "saved" tabs (not loaded)
-//   drag           reorder, move into a folder; a link dragged in from a page is added where you drop it
-//   Up/Down/Left/Right move around, Enter opens, F2 renames, Delete deletes (and offers to undo), / searches, Esc leaves
+//   Ctrl/Cmd-click select or unselect it     Shift-click select a range     (as with tabs; Esc or a click on nothing clears)
+//   middle-click   open it behind the current tab     Ctrl+Enter behind, Shift+Enter as a child of the current tab
+//   right-click    open, rename, change the address, delete; a folder opens as "saved" tabs (not loaded);
+//                  on a selection: open them all, move them, copy their addresses, delete them
+//   drag           reorder, move into a folder (the whole selection together); a link dragged in from a page is added where you drop it
+//   Up/Down/Left/Right move around (Shift extends the selection), Space selects, Ctrl+A all, Enter opens, F2 renames,
+//   Delete deletes (and offers to undo), / searches, Esc clears the selection, then leaves
 
 import { h, run, cmd, toast } from "./client.js";
 import { icon, twistyIcon } from "./icons.js";
-import { askText } from "./dialog.js";
+import { askText, askConfirm } from "./dialog.js";
+import { pickBookmarkFolder } from "./bookmark-picker.js";
 import { favicon } from "./tree-view.js";
 import { filterTree, hostOf, samePage } from "../../lib/bookmarks.js";
 import { highlight } from "../../lib/search.js";
@@ -39,8 +43,12 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   let query = "";
   let cursor = null;
   let dragging = null;
+  let dragIds = []; // everything the current drag carries (the selection, or just the row)
   let undoTimer = null;
   let index = new Map(); // id -> { node, parent, at }
+  let order = []; // the ids of the rows on screen, top to bottom
+  const selected = new Set();
+  let anchor = null;
 
   const remember = () => write({ scope, expanded: [...expanded].slice(-400) });
 
@@ -55,8 +63,9 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   const scopes = h("div", { class: "marks-scopes", role: "tablist", "aria-label": "Bookmark folders" });
   const list = h("div", { class: "marks-list", role: "tree", tabindex: "0", "aria-label": "Bookmarks" });
   const undo = h("div", { class: "marks-undo", role: "status", hidden: true });
-  const hint = h("div", { class: "marks-hint" }, "Ctrl-click: behind · Shift-click: as child · right-click: more");
-  root.replaceChildren(head, h("div", { class: "marks-controls" }, box, scopes), list, hint, undo);
+  const hint = h("div", { class: "marks-hint" }, "Ctrl-click: select · Shift-click: range · middle-click: behind · right-click: more");
+  const selbar = h("div", { class: "marks-sel", role: "status", hidden: true });
+  root.replaceChildren(head, h("div", { class: "marks-controls" }, box, scopes), list, selbar, hint, undo);
 
   // ---- what is shown ----------------------------------------------------
 
@@ -109,6 +118,9 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     index = new Map();
     const rows = flatten(items, filter, 0, scopeRoot() ?? null, []);
     if (!rows.some((r) => r.node.id === cursor)) cursor = rows[0]?.node.id ?? null;
+    order = rows.map((r) => r.node.id);
+    for (const id of [...selected]) if (!index.has(id)) selected.delete(id); // gone, or no longer on screen
+    if (anchor && !index.has(anchor)) anchor = null;
     const { icons, live } = knowledge();
     const terms = filter?.terms ?? [];
     status.textContent = !filter ? "" : rows.length ? `${rows.filter((r) => r.node.type !== "folder").length} found` : "No matches";
@@ -126,7 +138,61 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     }
     list.replaceChildren(...rows.map(({ node, depth }) => row(node, depth, icons, live, terms)));
     list.querySelector(".cursor")?.scrollIntoView({ block: "nearest" });
+    paintSelection();
   }
+
+  // ---- selection (as with tabs) -----------------------------------------
+
+  function paintSelection() {
+    list.querySelectorAll(".mrow").forEach((el) => el.classList.toggle("selected", selected.has(el.dataset.id)));
+    selbar.hidden = !selected.size;
+    if (!selected.size) return selbar.replaceChildren();
+    selbar.replaceChildren(
+      h("span", {}, `${selected.size} selected`),
+      h("span", { class: "hint" }, selected.size > 1 ? "Right-click for actions" : "Ctrl-click adds more, Shift-click selects a range"),
+      h("button", { class: "tool", title: "Clear selection (Esc)", "aria-label": "Clear selection", onclick: clearSelection }, icon("close", { size: 14 }))
+    );
+  }
+  function clearSelection() {
+    if (!selected.size) return false;
+    selected.clear();
+    anchor = null;
+    paintSelection();
+    return true;
+  }
+  function toggleSelect(id) {
+    if (selected.has(id)) selected.delete(id); else selected.add(id);
+    anchor = id;
+    cursor = id;
+    paintSelection();
+    markCursor();
+  }
+  function selectRange(id) {
+    const from = order.indexOf(anchor ?? cursor ?? id);
+    const to = order.indexOf(id);
+    if (from < 0 || to < 0) return toggleSelect(id);
+    selected.clear();
+    for (const rid of order.slice(Math.min(from, to), Math.max(from, to) + 1)) selected.add(rid);
+    cursor = id;
+    paintSelection();
+    markCursor();
+  }
+  function markCursor() {
+    list.querySelectorAll(".mrow").forEach((el) => el.classList.toggle("cursor", el.dataset.id === cursor));
+    list.querySelectorAll(".mrow").forEach((el) => el.classList.toggle("hit-current", el.dataset.id === cursor));
+    list.querySelector(".cursor")?.scrollIntoView({ block: "nearest" });
+  }
+
+  // What the selection stands for, in screen order: a chosen folder includes what is in it, so what is
+  // inside a chosen folder is not counted again.
+  function chosen() {
+    const ids = order.filter((id) => selected.has(id));
+    return ids.filter((id) => {
+      for (let p = index.get(id)?.parent; p; p = index.get(p.id)?.parent) if (selected.has(p.id)) return false;
+      return true;
+    }).map((id) => nodeOf(id)).filter(Boolean);
+  }
+  const leavesOf = (node) => (node.type === "folder" ? (node.children ?? []).flatMap(leavesOf) : node.url ? [node] : []);
 
   function row({ id, title, url, type, children }, depth, icons, live, terms) {
     const folder = type === "folder";
@@ -170,6 +236,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   }
 
   function pick(id) {
+    clearSelection();
     scope = id;
     remember();
     render();
@@ -256,6 +323,54 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     ]);
   }
 
+  // ---- the selection's menu ----------------------------------------------
+
+  async function openAll(nodes, mode) {
+    const leaves = nodes.flatMap(leavesOf);
+    if (!leaves.length) return toast("Nothing to open there");
+    if (leaves.length > 15 && !(await askConfirm(`Open ${leaves.length} bookmarks?`, "Open"))) return;
+    for (const n of leaves) await run("bookmarks:open", { id: n.id, windowId: windowId(), mode });
+  }
+
+  async function moveTo(nodes) {
+    const first = nodes[0];
+    const pick = await pickBookmarkFolder({ title: `Move ${nodes.length} item${nodes.length === 1 ? "" : "s"} to…`, initial: index.get(first?.id)?.parent?.id ?? scope });
+    if (!pick) return;
+    const r = await run("bookmarks:moveMany", { ids: nodes.map((n) => n.id), parentId: pick.id });
+    expanded.add(pick.id);
+    remember();
+    if (r?.skipped) toast(`${r.moved} moved, ${r.skipped} could not go there`);
+  }
+
+  async function removeAll(nodes) {
+    const ok = await run("bookmarks:remove", { ids: nodes.map((n) => n.id) });
+    if (!ok) return toast("Those cannot be deleted");
+    const folders = nodes.filter((n) => n.type === "folder").length;
+    clearSelection();
+    offerUndo(`Deleted ${nodes.length} item${nodes.length === 1 ? "" : "s"}${folders ? " and what was in the folders" : ""}`);
+  }
+
+  function menuForSelection(e) {
+    const nodes = chosen();
+    const pages = nodes.flatMap(leavesOf).length;
+    const folders = nodes.filter((n) => n.type === "folder");
+    const addresses = nodes.flatMap(leavesOf).map((n) => n.url).join("\n");
+    const items = [
+      { heading: `${selected.size} item${selected.size === 1 ? "" : "s"} selected` },
+      ...(pages ? [
+        { label: `Open ${pages} bookmark${pages === 1 ? "" : "s"} behind this tab`, onSelect: () => openAll(nodes, "background") },
+        { label: `Open ${pages} bookmark${pages === 1 ? "" : "s"} as children of this tab`, onSelect: () => openAll(nodes, "child") },
+      ] : []),
+      ...folders.map((f) => ({ label: `Open “${f.title || "Untitled folder"}” as saved tabs (not loaded)`, onSelect: () => run("bookmarks:openFolder", { id: f.id, windowId: windowId() }) })).slice(0, 3),
+      { separator: true },
+      { label: "Move to…", onSelect: () => moveTo(nodes) },
+      ...(pages ? [{ label: "Copy addresses", onSelect: () => navigator.clipboard?.writeText(addresses).then(() => toast(`${pages} address${pages === 1 ? "" : "es"} copied`), () => toast("Could not copy")) }] : []),
+      { separator: true },
+      { label: `Delete ${selected.size} item${selected.size === 1 ? "" : "s"}`, danger: true, onSelect: () => removeAll(nodes) },
+    ];
+    showMenu(e, items);
+  }
+
   // ---- mouse ------------------------------------------------------------
 
   const rowOf = (e) => e.target.closest?.(".mrow");
@@ -265,11 +380,16 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     if (!r) return;
     const node = nodeOf(r.dataset.id);
     if (!node) return;
+    if (e.ctrlKey || e.metaKey) return toggleSelect(node.id);
+    if (e.shiftKey) return selectRange(node.id);
+    clearSelection();
     cursor = node.id;
     if (node.type === "folder") return toggle(node.id);
-    openNode(node, e.ctrlKey || e.metaKey ? "background" : e.shiftKey ? "child" : "tab");
+    openNode(node, "tab");
     render();
   });
+  // A click on empty space drops the selection.
+  list.addEventListener("click", (e) => { if (!rowOf(e)) clearSelection(); });
   list.addEventListener("auxclick", (e) => {
     const r = rowOf(e);
     const node = r && nodeOf(r.dataset.id);
@@ -281,6 +401,8 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     if (!node) return;
     e.preventDefault();
     cursor = node.id;
+    if (selected.size > 1 && selected.has(node.id)) return menuForSelection(e);
+    clearSelection();
     menuFor(e, node);
   });
 
@@ -308,6 +430,8 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const r = rowOf(e);
     if (!r) return;
     dragging = r.dataset.id;
+    // Dragging one of several selected rows carries them all.
+    dragIds = selected.size > 1 && selected.has(dragging) ? chosen().map((n) => n.id) : [dragging];
     const node = nodeOf(dragging);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("application/x-grove-bookmark", dragging);
@@ -319,7 +443,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const external = !dragging && isExternal(e.dataTransfer);
     if (!dragging && !external) return;
     const r = rowOf(e);
-    if (dragging && r && (r.dataset.id === dragging || within(r.dataset.id, dragging))) return clearDrop();
+    if (dragging && r && dragIds.some((id) => r.dataset.id === id || within(r.dataset.id, id))) return clearDrop();
     e.preventDefault();
     e.dataTransfer.dropEffect = external ? "copy" : "move";
     const spot = spotFor(e, r);
@@ -333,15 +457,13 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     clearDrop();
     if (dragging) {
       e.preventDefault();
-      const id = dragging;
+      const ids = dragIds;
       dragging = null;
-      if (r && (r.dataset.id === id || within(r.dataset.id, id))) return;
-      const from = index.get(id);
-      let at = spot.at;
-      // Where it ends up among its new siblings: taking it out first shifts what is below it up by one.
-      if (at != null && from?.parent?.id === spot.parentId && from.at < at) at -= 1;
+      dragIds = [];
+      if (r && ids.some((id) => r.dataset.id === id || within(r.dataset.id, id))) return;
       if (spot.parentId && spot.mark === "drop-inside") expanded.add(spot.parentId);
-      await run("bookmarks:move", { id, parentId: spot.parentId, ...(at != null ? { index: at } : {}) });
+      // They land together, in the order shown, before the sibling the pointer was on.
+      await run("bookmarks:moveMany", { ids, parentId: spot.parentId, ...(spot.at != null ? { index: spot.at } : {}) });
       return;
     }
     if (!isExternal(e.dataTransfer)) return;
@@ -356,7 +478,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
 
   // ---- keyboard ---------------------------------------------------------
 
-  search.addEventListener("input", () => { query = search.value; render(); });
+  search.addEventListener("input", () => { query = search.value; clearSelection(); render(); });
   search.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (query) { search.value = ""; query = ""; render(); } else list.focus(); }
     else if (e.key === "ArrowDown" || e.key === "Enter" && !query) { e.preventDefault(); list.focus(); }
@@ -368,7 +490,21 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const at = ids.indexOf(cursor);
     const node = nodeOf(cursor);
     const go = (i) => { cursor = ids[Math.max(0, Math.min(ids.length - 1, i))] ?? null; render(); };
+    // Shift with an arrow extends the selection from where it started.
+    const extend = (i) => {
+      if (!ids.length) return;
+      if (anchor == null || !ids.includes(anchor)) anchor = cursor ?? ids[0];
+      const to = ids[Math.max(0, Math.min(ids.length - 1, i))];
+      const [a, b] = [ids.indexOf(anchor), ids.indexOf(to)].sort((x, y) => x - y);
+      selected.clear();
+      ids.slice(a, b + 1).forEach((id) => selected.add(id));
+      cursor = to;
+      render();
+    };
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "a") { e.preventDefault(); ids.forEach((id) => selected.add(id)); paintSelection(); return; }
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); return extend(at + (e.key === "ArrowDown" ? 1 : -1)); }
     switch (e.key) {
+      case " ": if (node) { e.preventDefault(); toggleSelect(node.id); } return;
       case "ArrowDown": e.preventDefault(); return go(at + 1);
       case "ArrowUp": e.preventDefault(); return go(at - 1);
       case "Home": e.preventDefault(); return go(0);
@@ -386,8 +522,15 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       }
       case "Enter": if (node) { e.preventDefault(); openNode(node, e.ctrlKey || e.metaKey ? "background" : e.shiftKey ? "child" : "tab"); } return;
       case "F2": if (node) { e.preventDefault(); rename(node); } return;
-      case "Delete": if (node) { e.preventDefault(); remove(node); } return;
-      case "Escape": if (document.getElementById("menu")?.hidden === false) return; e.preventDefault(); api.hide(); return; // a menu open: Esc closes just that
+      case "Delete":
+        if (selected.size > 1) { e.preventDefault(); removeAll(chosen()); }
+        else if (node) { e.preventDefault(); remove(node); }
+        return;
+      case "Escape":
+        if (document.getElementById("menu")?.hidden === false) return;
+        e.preventDefault();
+        if (!clearSelection()) api.hide(); // the first Esc puts the selection away, the next leaves
+        return;
       case "/": e.preventDefault(); search.focus(); search.select(); return;
     }
   });

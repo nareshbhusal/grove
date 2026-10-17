@@ -5,7 +5,8 @@
 // Keys (no Ctrl/Alt/Meta; ignored while you are typing in a field):
 //   gt         next tab           gT, gs   previous tab
 //   t          new tab            x        close the tab (never the window)
-//   r          reload             /        search the tabs (Grove's search field)
+//   r          reload             /        search: in the sidebar Grove's tab search, on a page a find bar
+//                                          (src/content/find.js; Enter keeps the matches, then n / N step, Esc clears)
 //   H, L       back, forward      << , >>  move the tab up, down among its siblings
 //   f          label what can be clicked (src/content/hints.js); type a label to click it,
 //              Shift on its last letter opens a link in a new child tab
@@ -99,7 +100,8 @@
 
   // send(action): a tab key. scroll(action): a scroll key. active(): are keys on. scrolling(): are scroll keys on.
   // hints: a controller from hints.js (pages only), hinting(): is `f` on.
-  function install(win, { send, active, scrolling = () => false, scroll = () => {}, hints = null, hinting = () => false }) {
+  // find: a controller from find.js (pages only): `/` opens it instead of being sent on.
+  function install(win, { send, active, scrolling = () => false, scroll = () => {}, hints = null, hinting = () => false, find = null }) {
     let pending = "";
     let timer = null;
     const reset = () => {
@@ -107,7 +109,12 @@
       clearTimeout(timer);
     };
     const sequences = () => (scrolling() ? { ...SEQUENCES, g: { ...SEQUENCES.g, ...SCROLL_SEQUENCES.g } } : SEQUENCES);
-    const singles = () => ({ ...SINGLES, ...(scrolling() ? SCROLL_SINGLES : {}), ...(hints && hinting() ? { f: "hints" } : {}) });
+    const singles = () => ({
+      ...SINGLES,
+      ...(scrolling() ? SCROLL_SINGLES : {}),
+      ...(hints && hinting() ? { f: "hints" } : {}),
+      ...(find ? { "/": "find", ...(find.active() ? { n: "findNext", N: "findPrev" } : {}) } : {}),
+    });
 
     // Returns true when the key press was taken (so the page must not see it).
     function onKey(e) {
@@ -142,6 +149,8 @@
       if (e.repeat && !REPEATABLE.has(action)) return true; // taken, but done once
       if (SCROLL_ACTIONS.has(action)) scroll(action, { held: !!e.repeat });
       else if (action === "hints") { if (!e.repeat) hints.start(); }
+      else if (action === "find") { if (!e.repeat) find.open(); }
+      else if (action === "findNext" || action === "findPrev") find.step(action === "findNext" ? 1 : -1);
       else send(action);
       return true;
     }
@@ -150,6 +159,18 @@
     // page or another listener that acts on those never sees half of "gt".
     let taken = null;
     const onDown = (e) => {
+      // The find bar is the page's input as far as the page is concerned: its keys go to it and to nobody else
+      // (the browser still types them into the box, stopping the event does not stop that).
+      if (find?.owns(e)) {
+        e.stopImmediatePropagation();
+        taken = null;
+        if (!active()) find.close(true);
+        else find.key(e);
+        return;
+      }
+      if (find?.running() && !active()) find.close(true);
+      // Esc puts the matches away (and still reaches the page).
+      if (e.key === "Escape" && active() && find?.active()) find.clear();
       // While labels are showing, they own the keyboard.
       if (hints?.running()) {
         if (!active()) hints.stop();
@@ -158,6 +179,7 @@
       taken = onKey(e) ? e.key : null;
     };
     const onRest = (e) => {
+      if (find?.owns(e)) { e.stopImmediatePropagation(); return; }
       if (taken === null || e.key !== taken) return;
       e.preventDefault();
       e.stopPropagation();
@@ -190,6 +212,7 @@
     b.runtime.onMessage?.addListener((msg) => {
       if (msg?.type === "vim:active") take(msg);
     });
+    const find = globalThis.groveFind?.create(window);
     const hints = globalThis.groveHints?.create(window, {
       chars: () => hintChars,
       open: (url) => { b.runtime.sendMessage({ type: "vim:hint", url }).catch(() => {}); },
@@ -199,6 +222,7 @@
       scrolling: () => scrollOn,
       hints,
       hinting: () => hintOn,
+      find,
       scroll: (action, opts) => scrollElement(findScroller(window), action, window, opts),
       send: (action) => { b.runtime.sendMessage({ type: "vim:key", action }).catch(() => {}); },
     });

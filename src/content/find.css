@@ -1,0 +1,3 @@
+/* Find on the page (src/content/find.js): the matches Grove paints with the CSS Custom Highlight API. */
+::highlight(grove-find) { background-color: #5eead4; color: #0b1020; }
+::highlight(grove-find-current) { background-color: #a78bfa; color: #120a2e; }
