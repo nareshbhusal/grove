@@ -149,8 +149,10 @@ and are ignored while you type in a field or hold Ctrl, Alt or Meta.
 | `H`, `L` | back, forward (the arrows next to the address bar) |
 | `<<`, `>>` | move the tab up, down among its siblings (Shift+, and Shift+. pressed twice); never across levels, children travel with it |
 
-`j k d u gg G` are the scroll keys: they scroll the page (or the box you are in; a page that scrolls an inner panel instead
-of itself is handled), and the list while the sidebar is focused. Holding `j`/`k`/`d`/`u` keeps scrolling. A separate setting turns
+`j k d u gg G` are the scroll keys: they scroll the box you are in, else whatever is under the middle of the window, else the page, and the
+list while the sidebar is focused. Many apps leave the page itself fixed and scroll a panel instead (often a custom element, or a box inside a
+component's shadow tree), so the page is only one candidate: the first box that can scroll *and still has room that way* is used, and a panel
+that has reached its end hands over to the one around it, as the browser's own scrolling does. Holding `j`/`k`/`d`/`u` keeps scrolling. A separate setting turns
 them off, for pages or extensions that own those keys.
 
 **Link hints (`f`).** Every link, button, field and other clickable thing in view gets a short label, a dark chip with a mint edge (fields are violet), so it is not the usual yellow
@@ -159,6 +161,9 @@ typed are not written into it). The labels are as short as they can be and none 
 While you type, labels that no longer match disappear; Backspace takes a letter back, Esc leaves, and a letter that matches nothing is ignored.
 **Shift with the last letter of a link's label opens it in a new tab as a child of the current one**, in the same container and behind it, so you can
 keep reading (Settings → vim can bring it to the front). Shift on a button or field just clicks it. Labels follow their elements as the page scrolls.
+The labels (and the `/` find bar) sit in a plain `div` with a closed shadow root and every property that keeps it visible set inline with `!important`
+(`src/content/overlay.js`), so a page stylesheet that hides undefined custom elements, or restyles `div`s, cannot hide them: before, such a page showed nothing
+while the keys still worked and clicked things unseen.
 Things hidden behind a dialog, disabled, invisible, or off the screen get no label; a wrapper a page made clickable gives way to the links
 inside it; frames of the same site are included. The letters, and whether `f` is on at all, are in Settings → vim.
 Not offered: `F` and multi-link modes: Shift on the last letter is the one gesture for "in a new tab".

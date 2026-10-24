@@ -3,7 +3,7 @@
 // current one (as its child) instead.
 //
 // A classic content script, loaded before keys.js (which decides when `f` starts it). Everything
-// is drawn in one closed shadow root so the page's styles cannot touch it and it never touches the page.
+// is drawn in one closed shadow root (overlay.js) so the page's styles cannot touch it and it never touches the page.
 //
 //   labels(count, chars)      short labels, none the start of another (so the last letter ends it)
 //   create(win, options)      { running(), start(), key(event), stop() }
@@ -198,7 +198,6 @@
   // ---- the overlay ---------------------------------------------------------
 
   const CSS = `
-    :host { all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }
     .tag { position: fixed; display: flex; padding: 1px 5px 2px; border-radius: 6px; font: 700 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       letter-spacing: .06em; text-transform: uppercase; color: #f2f5ff; background: #151a2b; border: 1px solid #5eead4;
       box-shadow: 0 0 0 1px rgba(21,26,43,.55), 0 2px 6px rgba(0,0,0,.4); white-space: nowrap; }
@@ -247,17 +246,14 @@
       if (run) return true;
       const items = collect(win);
       const doc = win.document;
-      const host = doc.createElement("grove-hints");
-      const shadow = host.attachShadow({ mode: "closed" });
-      const style = doc.createElement("style");
-      style.textContent = CSS;
-      shadow.append(style);
+      const overlay = globalThis.groveOverlay;
+      const { host, shadow } = overlay.create(doc, CSS);
       const hud = doc.createElement("div");
       hud.className = "hud";
       shadow.append(hud);
       if (!items.length) {
         hud.textContent = "Nothing to click in view";
-        (doc.documentElement ?? doc.body).append(host);
+        overlay.mount(doc, host);
         setTimeout(() => host.remove(), 1200);
         return false;
       }
@@ -277,7 +273,7 @@
       const hint = doc.createElement("b");
       hint.textContent = "⇧ + last letter";
       hud.append(hint, " opens a link in a new tab · Esc cancels");
-      (doc.documentElement ?? doc.body).append(host);
+      overlay.mount(doc, host);
 
       const onMove = () => redraw();
       const listeners = [

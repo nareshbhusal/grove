@@ -229,8 +229,7 @@
 
     // ---- the bar ----
     const CSS = `
-      :host { all: initial; }
-      .bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); box-sizing: border-box; width: min(460px, calc(100vw - 24px));
+      .bar { pointer-events: auto; position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); box-sizing: border-box; width: min(460px, calc(100vw - 24px));
         display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 12px; background: #151a2b; color: #e8ecf8;
         border: 1px solid #5eead4; box-shadow: 0 6px 24px #0007; font: 14px/1.3 system-ui, sans-serif; }
       .slash { color: #5eead4; font: 700 15px ui-monospace, monospace; }
@@ -252,10 +251,10 @@
 
     function open() {
       if (host) { input.focus(); input.select(); return true; }
-      host = doc.createElement("div");
-      const shadow = host.attachShadow({ mode: "closed" });
-      const style = doc.createElement("style");
-      style.textContent = CSS;
+      const overlay = globalThis.groveOverlay;
+      const made = overlay.create(doc, CSS);
+      host = made.host;
+      const shadow = made.shadow;
       const bar = doc.createElement("div");
       bar.className = "bar";
       const slash = doc.createElement("span");
@@ -272,11 +271,11 @@
       hint.className = "hint";
       hint.textContent = "Enter keeps · Esc clears";
       bar.append(slash, input, status, hint);
-      shadow.append(style, bar);
+      shadow.append(bar);
       input.value = query;
       input.addEventListener("input", () => run(input.value));
       input.addEventListener("blur", () => close());
-      (doc.documentElement ?? doc.body).append(host);
+      overlay.mount(doc, host);
       input.focus();
       input.select();
       if (query) run(query, { keepPlace: true });

@@ -45,7 +45,9 @@
 
   // ---- scrolling ---------------------------------------------------------
 
-  const isRootScroller = (el, win) => el === win.document.scrollingElement || el === win.document.documentElement || el === win.document.body;
+  // Only the box the browser scrolls the page with is scrolled through the window. `body` is not it
+  // when the page makes `html` fixed and lets `body` scroll: that one has to be scrolled itself.
+  const isRootScroller = (el, win) => el === win.document.scrollingElement;
 
   // j / k move a little, d / u half a screen, gg / G the ends: all of them glide, so a single press is smooth.
   // A key that is held (`held`) moves at once instead: a glide started on every repeat would lag behind the finger.
@@ -66,34 +68,89 @@
     }
   }
 
+  // Which way a scroll action goes: 1 down, -1 up.
+  const DIRECTION = { scrollDown: 1, pageDown: 1, bottom: 1, scrollUp: -1, pageUp: -1, top: -1 };
+
+  // Can a box with these measures still go that way? (A box already at its end hands over to the one around it,
+  // as the browser's own scrolling does.)
+  function canMove({ top, view, total }, dir) {
+    if (dir > 0) return top + view < total - 1;
+    if (dir < 0) return top > 0;
+    return total > view + 1;
+  }
+  const measures = (el) => ({ top: el.scrollTop, view: el.clientHeight, total: el.scrollHeight });
+
+  // A box the person can scroll: it overflows and its style lets it scroll.
   function scrollable(el, win) {
     return /(auto|scroll|overlay)/.test(win.getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1;
   }
 
-  // What a page scrolls: the box you are in, else the page, else its biggest scrolling box
-  // (many apps scroll an inner panel and leave the page itself fixed).
-  function findScroller(win) {
+  // The page itself: unless its style locks it (overflow: hidden on html, or on body when html leaves it to body).
+  function pageScrolls(win) {
     const doc = win.document;
-    const page = doc.scrollingElement || doc.documentElement;
-    for (let el = doc.activeElement; el && el !== doc.body && el !== doc.documentElement; el = el.parentElement) {
-      if (scrollable(el, win)) return el;
+    const own = win.getComputedStyle(doc.documentElement).overflowY;
+    const used = own === "visible" && doc.body ? win.getComputedStyle(doc.body).overflowY : own;
+    return used !== "hidden" && used !== "clip";
+  }
+
+  const hostOf = (el) => el.parentElement ?? el.getRootNode?.().host ?? null; // up, out of shadow trees too
+
+  // What is under a point, looking inside open shadow trees (component-based apps keep their content there).
+  function deepAt(doc, x, y) {
+    let el = doc.elementFromPoint(x, y);
+    for (let depth = 0; el && depth < 12; depth++) {
+      const inner = (el.openOrClosedShadowRoot ?? el.shadowRoot)?.elementFromPoint?.(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
     }
-    if (page.scrollHeight > win.innerHeight + 1) return page;
-    if (doc.body && scrollable(doc.body, win)) return doc.body;
-    let best = null;
-    let bestArea = 0;
+    return el;
+  }
+
+  // Every box that might be the one to scroll, best guess first: the one you are in, those under the middle
+  // of the window, the page, then everything else that scrolls, largest in view first. Lazy: a good guess
+  // costs nothing more.
+  function* scrollCandidates(win) {
+    const doc = win.document;
+    const root = doc.scrollingElement || doc.documentElement;
+    for (let el = doc.activeElement; el && el !== doc.body && el !== doc.documentElement; el = hostOf(el)) yield el;
+    for (const [fx, fy] of [[0.5, 0.5], [0.5, 0.25], [0.5, 0.75], [0.25, 0.5], [0.75, 0.5]]) {
+      for (let el = deepAt(doc, win.innerWidth * fx, win.innerHeight * fy); el; el = hostOf(el)) yield el;
+    }
+    yield root;
+    if (doc.body) yield doc.body;
+    const rest = [];
     let seen = 0;
-    for (const el of doc.querySelectorAll("div,main,section,article,aside,ul,ol,table")) {
-      if (++seen > 4000) break;
-      if (!scrollable(el, win)) continue;
-      const r = el.getBoundingClientRect();
-      const area = Math.max(0, Math.min(r.right, win.innerWidth) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, win.innerHeight) - Math.max(r.top, 0));
-      if (area > bestArea) {
-        best = el;
-        bestArea = area;
+    const visit = (scope) => {
+      for (const el of scope.querySelectorAll("*")) {
+        if (++seen > 6000) return;
+        if (scrollable(el, win)) {
+          const r = el.getBoundingClientRect();
+          const area = Math.max(0, Math.min(r.right, win.innerWidth) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, win.innerHeight) - Math.max(r.top, 0));
+          if (area > 0) rest.push([area, el]);
+        }
+        const shadow = el.openOrClosedShadowRoot ?? el.shadowRoot;
+        if (shadow) visit(shadow);
       }
+    };
+    visit(doc);
+    rest.sort((a, b) => b[0] - a[0]);
+    for (const [, el] of rest) yield el;
+  }
+
+  // What a page scrolls, for a key that goes `dir` (1 down, -1 up, 0 either): the first box that can scroll
+  // and still has room that way, or null. Many apps leave the page itself fixed and scroll a panel (often a
+  // custom element, or a box inside a component's shadow tree), so the page is one candidate, not the answer.
+  function findScroller(win, dir = 0) {
+    const doc = win.document;
+    const root = doc.scrollingElement || doc.documentElement;
+    const tried = new Set();
+    for (const el of scrollCandidates(win)) {
+      if (!el || tried.has(el)) continue;
+      tried.add(el);
+      const ok = el === root ? pageScrolls(win) : scrollable(el, win);
+      if (ok && canMove(measures(el), dir)) return el;
     }
-    return best ?? page;
+    return null;
   }
 
   // ---- keys --------------------------------------------------------------
@@ -195,7 +252,7 @@
     };
   }
 
-  globalThis.groveVimKeys = { install, isEditable, scrollElement, findScroller };
+  globalThis.groveVimKeys = { install, isEditable, scrollElement, findScroller, canMove, DIRECTION };
 
   // On a web page: ask the background whether the keys are on for this page.
   const b = globalThis.browser;
@@ -223,7 +280,10 @@
       hints,
       hinting: () => hintOn,
       find,
-      scroll: (action, opts) => scrollElement(findScroller(window), action, window, opts),
+      scroll: (action, opts) => {
+        const el = findScroller(window, DIRECTION[action] ?? 0);
+        if (el) scrollElement(el, action, window, opts);
+      },
       send: (action) => { b.runtime.sendMessage({ type: "vim:key", action }).catch(() => {}); },
     });
   }
