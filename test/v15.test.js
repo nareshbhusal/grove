@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import "../src/content/overlay.js";
+import "../src/content/hints.js";
 import "../src/content/keys.js";
 
 const { canMove, DIRECTION } = globalThis.groveVimKeys;
@@ -71,4 +72,41 @@ test("overlay: mount puts the holder in the page", () => {
   const { host } = globalThis.groveOverlay.create(doc);
   globalThis.groveOverlay.mount(doc, host);
   assert.deepEqual(doc.documentElement.children, [host]);
+});
+
+// ---- what `f` can see: elements inside shadow trees ----
+
+// A tiny node: parent in the same tree, or a shadow root whose host is the next hop up.
+const node = (name, parent = null, root = null) => ({
+  name,
+  parentElement: parent,
+  getRootNode: () => root ?? { host: null },
+});
+
+test("hints: within() looks through shadow boundaries, which Node.contains does not", () => {
+  const { within } = globalThis.groveHints;
+  const page = node("page");
+  const host = node("host", page);
+  const shadowRoot = { host };
+  const frame = node("frame", null, shadowRoot); // top of the shadow tree
+  const button = node("button", frame, shadowRoot);
+  assert.equal(within(host, button), true, "a button inside a component is inside the component");
+  assert.equal(within(page, button), true);
+  assert.equal(within(button, host), false);
+  assert.equal(within(button, button), true);
+  assert.equal(within(node("other"), button), false);
+});
+
+test("hints: deepHit() asks each shadow tree in turn, since elementFromPoint stops at the first host", () => {
+  const { deepHit } = globalThis.groveHints;
+  const button = { name: "button" };
+  const innerHost = { name: "inner", shadowRoot: { elementFromPoint: () => button } };
+  const host = { name: "host", shadowRoot: { elementFromPoint: () => innerHost } };
+  const doc = { elementFromPoint: () => host };
+  assert.equal(deepHit(doc, 5, 5), button);
+  const plain = { name: "plain" };
+  assert.equal(deepHit({ elementFromPoint: () => plain }, 5, 5), plain);
+  assert.equal(deepHit({ elementFromPoint: () => null }, 5, 5), null);
+  const same = { name: "same", shadowRoot: { elementFromPoint: () => same } };
+  assert.equal(deepHit({ elementFromPoint: () => same }, 5, 5), same, "a tree that answers with its own host ends the search");
 });

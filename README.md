@@ -164,8 +164,13 @@ keep reading (Settings → vim can bring it to the front). Shift on a button or 
 The labels (and the `/` find bar) sit in a plain `div` with a closed shadow root and every property that keeps it visible set inline with `!important`
 (`src/content/overlay.js`), so a page stylesheet that hides undefined custom elements, or restyles `div`s, cannot hide them: before, such a page showed nothing
 while the keys still worked and clicked things unseen.
-Things hidden behind a dialog, disabled, invisible, or off the screen get no label; a wrapper a page made clickable gives way to the links
-inside it; frames of the same site are included. The letters, and whether `f` is on at all, are in Settings → vim.
+Things hidden behind a dialog, disabled, invisible, or off the screen get no label; frames of the same site are included, and so is everything a
+component draws inside its own shadow tree (a gallery's next and previous arrows, say: the browser's hit test stops at the component, so each tree
+is asked in turn). Something is "hidden behind" only if none of five spots on it is what you would hit, so an icon laid over the middle of a
+button does not hide it. A control that is transparent until hovered (arrows that fade in) is still labelled: if you can click it, it is there.
+A wrapper a page made clickable (a hand cursor, `onclick`) gives way to the links and buttons inside it, which are what you mean; but a card that is
+clickable as a whole **keeps a label of its own, placed on a part of it that is not covered by those**, such as its text, so the body of a post can be opened too.
+A page can make something clickable with a listener, which no extension can see; those are only found if the page also shows a hand over them or marks them up. The letters, and whether `f` is on at all, are in Settings → vim.
 Not offered: `F` and multi-link modes: Shift on the last letter is the one gesture for "in a new tab".
 
 Next/previous follow the order of the sidebar, wrap around, step over what is folded away, and stay in the open
@@ -400,5 +405,7 @@ Downloads panel instead, which gives a `file://` address.
 - Opening an empty folder opens one blank tab inside it (Firefox needs a visible tab).
 - Container rerouting reopens the tab, so a navigation that must change
   container loses the old tab's history (the old tab is kept if it had a page).
+- Link hints look at up to 200,000 elements, for at most 0.4 s, in page order: on a page far bigger than that (a feed scrolled for a long time), what is
+  on screen far down may get no label.
 - Private windows: see "Private browsing".
 - The tests run against an in-memory fake of the Firefox API, not Firefox itself.

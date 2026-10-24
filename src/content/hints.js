@@ -17,7 +17,9 @@
 
   const DEFAULT_CHARS = "asdfghjklqwertyuiop";
   const MAX_HINTS = 600;
-  const MAX_SCAN = 20000;
+  const MAX_SCAN = 200000; // elements looked at (long feeds keep what is on screen far down the page)
+  const SCAN_MS = 400; // ...but never longer than this
+  const MAX_WRAPPERS = 40; // clickable wrappers examined for a part of their own
   const OPENABLE = /^(https?|ftp|file):/i;
 
   // Things that are clickable because of what they are...
@@ -63,6 +65,7 @@
   function* walk(root, budget) {
     for (const el of root.querySelectorAll("*")) {
       if (budget.left-- <= 0) return;
+      if ((budget.left & 511) === 0 && Date.now() > budget.until) return;
       yield el;
       const shadow = el.openOrClosedShadowRoot ?? el.shadowRoot;
       if (shadow) yield* walk(shadow, budget);
@@ -91,15 +94,66 @@
     return null;
   }
 
-  // Is the element what you would actually hit at that spot (not hidden under a dialog)?
+  // One step up, out of a shadow tree into its host when the element is at the top of one.
+  const up = (el) => el.parentElement ?? el.getRootNode?.().host ?? null;
+
+  // Is `inner` the same element as `outer` or somewhere inside it, shadow trees included?
+  // (Node.contains stops at a shadow boundary, so on its own it misses everything a component draws.)
+  function within(outer, inner) {
+    for (let n = inner, hops = 0; n && hops < 500; n = up(n), hops++) if (n === outer) return true;
+    return false;
+  }
+
+  // The innermost element at a point of the document. elementFromPoint stops at the first shadow host:
+  // the host is what it returns, never the button inside it, so each shadow tree has to be asked in turn.
+  function deepHit(doc, x, y) {
+    let hit = doc.elementFromPoint(x, y);
+    for (let depth = 0; hit && depth < 16; depth++) {
+      const inner = (hit.openOrClosedShadowRoot ?? hit.shadowRoot)?.elementFromPoint?.(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  }
+
+  // Is the element what you would actually hit somewhere in view (not hidden under a dialog)? A few spots are
+  // tried, not just the middle: a label or an icon laid over the middle of a control does not hide the control.
+  const SPOTS = [[0.5, 0.5], [0.15, 0.5], [0.85, 0.5], [0.5, 0.15], [0.5, 0.85]];
   function reachable(item, spot) {
     const doc = item.el.ownerDocument;
-    let top = doc.elementFromPoint((spot.l + spot.r) / 2 - spot.x, (spot.t + spot.b) / 2 - spot.y);
-    for (let hops = 0; top && hops < 50; hops++) {
-      if (top === item.el || item.el.contains(top) || top.contains(item.el)) return true;
-      top = top.parentNode?.host ?? top.getRootNode?.()?.host ?? null; // out of a shadow tree
+    for (const [fx, fy] of SPOTS) {
+      const hit = deepHit(doc, spot.l + (spot.r - spot.l) * fx - spot.x, spot.t + (spot.b - spot.t) * fy - spot.y);
+      if (hit && (within(item.el, hit) || within(hit, item.el))) return true;
     }
     return false;
+  }
+
+  // Does the page show a hand over this element (and not only because an ancestor does)?
+  function handOver(el) {
+    const view = el.ownerDocument.defaultView;
+    if (!view || view.getComputedStyle(el).cursor !== "pointer") return false;
+    const parent = el.parentElement;
+    return !(parent && view.getComputedStyle(parent).cursor === "pointer");
+  }
+
+  // A wrapper the page made clickable gives way to what is inside it, because those are what you mean.
+  // But if a part of it would still take a click of its own (the text of a card that is clickable as a whole,
+  // the gap between its buttons) it keeps a label there. Returns that spot as an offset from its corner, or null.
+  function ownSpot(wrapper, inside) {
+    const { spot, el } = wrapper;
+    const doc = el.ownerDocument;
+    const cols = 6;
+    const rows = 5;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const px = spot.l + ((spot.r - spot.l) * (c + 0.5)) / cols;
+        const py = spot.t + ((spot.b - spot.t) * (r + 0.5)) / rows;
+        const hit = deepHit(doc, px - spot.x, py - spot.y);
+        if (!hit || !within(el, hit) || inside.some((b) => within(b.el, hit))) continue;
+        return { dx: px - spot.left, dy: py - spot.top };
+      }
+    }
+    return null;
   }
 
   function linkOf(el) {
@@ -121,7 +175,7 @@
   // Everything clickable that you can see, in page order.
   function collect(win) {
     const found = [];
-    const budget = { left: MAX_SCAN };
+    const budget = { left: MAX_SCAN, until: Date.now() + SCAN_MS };
     const scan = (doc, frames) => {
       for (const el of walk(doc, budget)) {
         if (/^i?frame$/i.test(el.tagName)) {
@@ -140,8 +194,7 @@
           if (!view || el.children.length > 20) continue;
           const spot = locate(item, win);
           if (!spot) continue;
-          const parent = el.parentElement;
-          if (view.getComputedStyle(el).cursor !== "pointer" || (parent && view.getComputedStyle(parent).cursor === "pointer")) continue;
+          if (!handOver(el)) continue;
           item.pointer = true;
           item.loose = true;
           item.spot = spot;
@@ -150,7 +203,8 @@
         const spot = item.spot ?? locate(item, win);
         if (!spot) continue;
         const style = el.ownerDocument.defaultView?.getComputedStyle(el);
-        if (style && (style.visibility === "hidden" || style.opacity === "0" || style.pointerEvents === "none")) continue;
+        // Not opacity: a control that fades in on hover (a gallery's arrows) is still there to be clicked.
+        if (style && (style.visibility === "hidden" || style.pointerEvents === "none")) continue;
         if (!reachable(item, spot)) continue;
         item.spot = spot;
         item.href = linkOf(el);
@@ -159,11 +213,26 @@
       }
     };
     scan(win.document, []);
-    // A wrapper the page made clickable gives way to what is inside it, and anything inside a real link or button.
-    const keep = found.filter((a) => {
-      if (!a.loose) return true;
-      return !found.some((b) => b !== a && (a.el.contains(b.el) || (b.strong && b.el.contains(a.el))));
-    });
+    // A wrapper the page made clickable gives way to what is inside it, and anything inside a real link or button
+    // (unless part of it would still take a click of its own: see ownSpot).
+    const keep = [];
+    let examined = 0;
+    for (const a of found) {
+      if (!a.loose) {
+        keep.push(a);
+        continue;
+      }
+      if (found.some((b) => b !== a && b.strong && within(b.el, a.el))) continue;
+      const inside = found.filter((b) => b !== a && within(a.el, b.el));
+      if (!inside.length) {
+        keep.push(a);
+        continue;
+      }
+      const sure = a.pointer || a.el.hasAttribute("onclick") || a.el.hasAttribute("jsaction") || handOver(a.el);
+      if (!sure || examined++ >= MAX_WRAPPERS) continue;
+      a.anchor = ownSpot(a, inside);
+      if (a.anchor) keep.push(a);
+    }
     return keep.slice(0, MAX_HINTS);
   }
 
@@ -229,8 +298,9 @@
         b.node.classList.toggle("gone", !live);
         if (!spot) continue;
         // On the top-left corner, half outside it, so the first letters of a link stay readable.
-        b.node.style.left = `${Math.max(0, spot.left - 7)}px`;
-        b.node.style.top = `${Math.max(0, spot.top - 8)}px`;
+        // (a wrapper that kept a label for a part of itself shows it there instead)
+        b.node.style.left = `${Math.max(0, spot.left + (b.item.anchor?.dx ?? 0) - 7)}px`;
+        b.node.style.top = `${Math.max(0, spot.top + (b.item.anchor?.dy ?? 0) - 8)}px`;
         b.done.textContent = b.label.slice(0, run.typed.length);
         b.rest.textContent = b.label.slice(run.typed.length);
       }
@@ -322,5 +392,5 @@
     return { running: () => !!run, start, key, stop };
   }
 
-  globalThis.groveHints = { create, labels, alphabet, collect, DEFAULT_CHARS };
+  globalThis.groveHints = { create, labels, alphabet, collect, within, deepHit, DEFAULT_CHARS };
 })();
