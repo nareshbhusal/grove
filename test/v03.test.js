@@ -76,15 +76,19 @@ test("restart: the setting can turn restoring off", async () => {
   assert.equal(second.sim.reloads.length, 0);
 });
 
-test("unloaded state reaches the node, the active tab cannot be unloaded", async () => {
+test("unloaded state reaches the node; a tab alone in its window cannot be unloaded (nowhere to go)", async () => {
   const t = await boot({ seed: [{ url: "https://a.test/", active: true }, { url: "https://b.test/" }] });
+  const a = t.nodeByUrl("https://a.test/");
   const b = t.nodeByUrl("https://b.test/");
   await t.run("tab:unload", { id: b });
   await settle();
   assert.equal(t.m.tree.get(b).discarded, true);
-  await assert.rejects(() => t.run("tab:unload", { id: t.nodeByUrl("https://a.test/") }), /cannot be unloaded/);
   await t.run("tab:load", { id: b });
   assert.equal(t.m.tree.get(b).discarded, false);
+  await t.run("tab:close", { id: b });
+  await settle();
+  await assert.rejects(() => t.run("tab:unload", { id: a }), /no other tab/);
+  assert.equal(t.m.tree.get(a).discarded, false);
 });
 
 test("a tab in a split view is flagged (read-only, Firefox 149+)", async () => {

@@ -26,6 +26,7 @@ function ev() {
 
 export function createFakeBrowser({ storageData = {} } = {}) {
   let nextTab = 1;
+  let accessTick = 0;
   let nextWin = 1;
   let nextCtr = 1;
   const tabs = new Map();
@@ -134,7 +135,7 @@ export function createFakeBrowser({ storageData = {} } = {}) {
           pinned: !!props.pinned, hidden: false, discarded: false, audible: false, status: "complete",
           mutedInfo: { muted: false },
           cookieStoreId: props.cookieStoreId ?? "firefox-default", openerTabId: props.openerTabId, incognito: !!wins.get(windowId)?.incognito,
-          width: 1200, height: 800,
+          width: 1200, height: 800, successorTabId: -1, lastAccessed: ++accessTick,
         };
         tabs.set(tab.id, tab);
         inWin(windowId).filter((t) => t !== tab && t.index >= tab.index).forEach((t) => t.index++);
@@ -153,11 +154,26 @@ export function createFakeBrowser({ storageData = {} } = {}) {
             await E.tabUpdated.dispatch(id, { discarded: false, url: props.url }, clone(t));
           }
         }
+        if ("successorTabId" in props) {
+          const to = props.successorTabId;
+          if (to !== -1 && to != null) {
+            const target = tabs.get(to);
+            if (!target) throw new Error(`Invalid tab ID: ${to}`);
+            if (to === id || target.windowId !== t.windowId) throw new Error("Invalid successor tab");
+          }
+          t.successorTabId = to ?? -1;
+        }
         if (props.active) {
           if (t.hidden) throw new Error("Cannot activate a hidden tab");
           const prev = inWin(t.windowId).find((x) => x.active);
-          if (prev) prev.active = false;
+          if (prev) { prev.active = false; prev.lastAccessed = ++accessTick; }
           t.active = true;
+          t.lastAccessed = ++accessTick;
+          sim.activations.push(id);
+          if (t.discarded) { // selecting an unloaded tab loads it
+            t.discarded = false;
+            await E.tabUpdated.dispatch(id, { discarded: false }, clone(t));
+          }
           await E.tabActivated.dispatch({ tabId: id, windowId: t.windowId, previousTabId: prev?.id });
         }
         if (props.muted !== undefined) {
@@ -173,8 +189,10 @@ export function createFakeBrowser({ storageData = {} } = {}) {
           const siblings = inWin(t.windowId).filter((x) => x.id !== id && !x.hidden);
           tabs.delete(id);
           reindex(t.windowId);
+          for (const x of tabs.values()) if (x.successorTabId === id) x.successorTabId = t.successorTabId; // the chain closes up
           if (t.active && siblings.length) {
-            const next = siblings.find((x) => x.index >= t.index) ?? siblings.at(-1);
+            const named = siblings.find((x) => x.id === t.successorTabId);
+            const next = named ?? siblings.find((x) => x.index >= t.index) ?? siblings.at(-1);
             await E.tabRemoved.dispatch(id, { windowId: t.windowId, isWindowClosing: false });
             await browser.tabs.update(next.id, { active: true });
           } else {
@@ -213,11 +231,11 @@ export function createFakeBrowser({ storageData = {} } = {}) {
         for (const id of [].concat(ids)) {
           const t = tabs.get(id);
           if (t?.active) throw new Error("Cannot hide the active tab");
-          if (t) t.hidden = true;
+          if (t) { t.hidden = true; await E.tabUpdated.dispatch(id, { hidden: true }, clone(t)); }
         }
       },
       async show(ids) {
-        for (const id of [].concat(ids)) { const t = tabs.get(id); if (t) t.hidden = false; }
+        for (const id of [].concat(ids)) { const t = tabs.get(id); if (t) { t.hidden = false; await E.tabUpdated.dispatch(id, { hidden: false }, clone(t)); } }
       },
     },
 
@@ -382,6 +400,7 @@ export function createFakeBrowser({ storageData = {} } = {}) {
     downloadFails: null,
     searches: [],
     captures: [], // captureTab calls
+    activations: [], // tab ids selected through tabs.update, in order
     captureFails: false,
     // Put bookmarks in without events: [{ title, url }] or [{ title, children: [...] }] into a folder.
     seedBookmarks(parentId, list) {
@@ -438,7 +457,7 @@ export function createFakeBrowser({ storageData = {} } = {}) {
       const tab = {
         id: nextTab++, windowId: w.id, index: 0, url, title: url, active: true, pinned: false, hidden: false, discarded: false,
         audible: false, status: "complete", cookieStoreId: incognito ? "firefox-private" : "firefox-default", incognito, width: 1200, height: 800,
-        mutedInfo: { muted: false },
+        mutedInfo: { muted: false }, successorTabId: -1, lastAccessed: ++accessTick,
       };
       tabs.set(tab.id, tab);
       if (announce) E.tabCreated.fire(clone(tab));
@@ -453,7 +472,7 @@ export function createFakeBrowser({ storageData = {} } = {}) {
         id: nextTab++, windowId, index: inWin(windowId).length, url, title: title ?? url, active, pinned,
         hidden: false, discarded, audible: false, status: "complete", cookieStoreId, incognito: !!wins.get(windowId)?.incognito,
         width: 1200, height: 800,
-        mutedInfo: { muted: false },
+        mutedInfo: { muted: false }, successorTabId: -1, lastAccessed: ++accessTick,
       };
       tabs.set(tab.id, tab);
       return tab.id;

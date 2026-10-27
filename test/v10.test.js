@@ -78,6 +78,7 @@ test("unloaded tabs are included or skipped by the setting", async () => {
   await t.key("a", "next");
   assert.equal(active(t).url, U("b"), "included by default");
   await t.browser.tabs.update(t.tab("a").id, { active: true });
+  await t.sim.discardTab(t.tab("b").id); // showing it loaded it; unload it again
   await t.run("settings:set", { module: "vim", key: "includeUnloaded", value: false });
   await t.key("a", "next");
   assert.equal(active(t).url, U("c"), "skipped when asked");

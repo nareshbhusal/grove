@@ -27,6 +27,7 @@
 
 import { uid } from "../lib/util.js";
 import * as T from "../lib/tree.js";
+import { pickSuccessor } from "../lib/succession.js";
 
 const NODE_KEY = "grove:node";
 const LATE_EVIDENCE_MS = 3000;
@@ -64,6 +65,11 @@ export default {
       restoreLoaded: {
         type: "boolean",
         label: "After a restart, load the tabs that were loaded before (Firefox restores them unloaded)",
+        default: true,
+      },
+      closeToRecent: {
+        type: "boolean",
+        label: "When the tab you are looking at closes, go to the one you used before it (and so on back), skipping tabs that are not loaded. Unloading the tab you are looking at does the same",
         default: true,
       },
       ghostMinutes: {
@@ -433,6 +439,7 @@ export default {
 
     const onUpdated = async (tabId, changeInfo, tab) => {
       await pending.get(tabId);
+      if ("discarded" in changeInfo || "hidden" in changeInfo) scheduleSuccessor(tab?.windowId);
       const nodeId = nodeByTab.get(tabId);
       if (!nodeId) return;
       const keys = ["url", "title", "favIconUrl", "pinned", "status", "discarded", "audible", "mutedInfo", "splitViewId"];
@@ -443,8 +450,11 @@ export default {
       await bus.emit("tab:updated", { tabId, nodeId, changeInfo, tab });
     };
 
-    const onRemoved = async (tabId, { isWindowClosing } = {}) => {
+    const onRemoved = async (tabId, { isWindowClosing, windowId } = {}) => {
       await pending.get(tabId);
+      seen.delete(tabId);
+      given.delete(tabId);
+      if (!isWindowClosing) scheduleSuccessor(windowId);
       lastActive.forEach((v, k) => v === tabId && lastActive.delete(k));
       if (ignoreRemoval.delete(tabId)) {
         unbind(tabId);
@@ -464,6 +474,8 @@ export default {
     const onActivated = async ({ tabId, windowId }) => {
       await pending.get(tabId);
       activeByWindow.set(windowId, tabId);
+      seen.set(tabId, ++visits);
+      scheduleSuccessor(windowId);
       const nodeId = nodeByTab.get(tabId);
       const node = nodeId ? tree.get(nodeId) : null;
       if (node) {
@@ -507,6 +519,47 @@ export default {
     api.tabs.onActivated.addListener(onActivated);
     api.tabs.onAttached.addListener(onAttached);
     api.webNavigation?.onCreatedNavigationTarget.addListener(onNavTarget);
+
+    // ---- where to go when the tab you are looking at closes or is unloaded ----
+    //
+    // Firefox decides that itself unless a tab has a successor (tabs.update successorTabId): then closing
+    // the tab shows its successor. So the tab you are looking at always gets the one you used before it
+    // as its successor, chosen among tabs that are loaded (src/lib/succession.js). That way it holds
+    // however the tab is closed (Ctrl+W, the sidebar, a script) and nothing has to intercept the close.
+    const NO_TAB = api.tabs.TAB_ID_NONE ?? -1;
+    const seen = new Map(); // tabId -> how recently it was shown (larger = later); in memory
+    const given = new Map(); // tabId -> the successor Grove set on it
+    const successorTimers = new Map(); // windowId -> timer
+    let visits = 0;
+    const noSuccessor = (id) => id == null || id < 0;
+
+    const windowTabs = (windowId) => api.tabs.query({ windowId }).catch(() => []);
+
+    async function refreshSuccessor(windowId) {
+      const list = await windowTabs(windowId);
+      const here = list.find((t) => t.active);
+      if (!here) return;
+      const had = noSuccessor(here.successorTabId) ? NO_TAB : here.successorTabId;
+      let want = NO_TAB;
+      if (settings.get("tabs", "closeToRecent")) want = pickSuccessor(list, here.id, { seen })?.id ?? NO_TAB;
+      else if (given.get(here.id) !== had) return; // off: only undo what we set ourselves
+      if (want === had) return;
+      try {
+        await api.tabs.update(here.id, { successorTabId: want });
+        if (want === NO_TAB) given.delete(here.id);
+        else given.set(here.id, want);
+      } catch { /* the tab or its successor went away meanwhile; the next event looks again */ }
+    }
+
+    // Many things change the answer at once (a switch, a tab unloaded, a panel shown): look once, shortly after.
+    function scheduleSuccessor(windowId) {
+      if (windowId == null) return;
+      clearTimeout(successorTimers.get(windowId));
+      successorTimers.set(windowId, setTimeout(() => {
+        successorTimers.delete(windowId);
+        refreshSuccessor(windowId).catch(() => {});
+      }, 30));
+    }
 
     // ---- commands --------------------------------------------------------
 
@@ -682,15 +735,12 @@ export default {
       return true;
     });
 
-    // Free the memory of a tab you are not using. Firefox keeps it in the strip.
+    // Free the memory of a tab. If you are looking at it, you go to the tab you used before it first (as when
+    // it closes: a loaded one if there is one), because a tab being shown cannot be unloaded.
     commands.register("tab:unload", async ({ id }) => {
-      const tabId = tabByNode.get(id);
-      if (tabId == null) return false;
-      const tab = await api.tabs.get(tabId);
-      if (tab.active) throw new Error("The tab you are looking at cannot be unloaded.");
-      await api.tabs.discard(tabId);
-      // You chose this: remember it even inside the startup window.
-      tree.mutate((all) => { if (all[id]) all[id].wasLoaded = false; }, "unload");
+      if (tabByNode.get(id) == null) return false;
+      const r = await unloadTabs([id]);
+      if (r.skipped) throw new Error("There is no other tab to switch to, so this one stays loaded.");
       return true;
     });
 
@@ -713,23 +763,38 @@ export default {
       return [...out].filter((id) => tabByNode.has(id));
     }
 
-    // Unload many tabs at once. The tab you are looking at (in any window) cannot
-    // be unloaded, so it is skipped and reported.
-    commands.register("tabs:unload", async ({ ids = [], deep = false }) => {
+    // Unload tabs. A tab being looked at (in any window) is left for the tab you used before it, chosen among
+    // tabs that are not being unloaded too; if there is no other tab it is skipped and reported.
+    async function unloadTabs(nodeIds) {
       const all = tree.all();
-      const targets = liveTabsUnder(ids, deep).filter((id) => !all[id].discarded);
+      const found = [];
+      for (const id of nodeIds) {
+        if (!all[id] || all[id].discarded || !tabByNode.has(id)) continue;
+        const tab = await api.tabs.get(tabByNode.get(id)).catch(() => null);
+        if (tab && !tab.discarded) found.push({ id, tab });
+      }
+      const exclude = found.map((f) => f.tab.id);
       const doomed = [];
       let skipped = 0;
-      for (const id of targets) {
-        const tab = await api.tabs.get(tabByNode.get(id)).catch(() => null);
-        if (!tab || tab.discarded) continue;
-        if (tab.active) skipped++;
-        else doomed.push(id);
+      for (const { id, tab } of found) {
+        if (tab.active) {
+          const next = pickSuccessor(await windowTabs(tab.windowId), tab.id, { seen, exclude });
+          if (!next) {
+            skipped++;
+            continue;
+          }
+          await api.tabs.update(next.id, { active: true });
+          diagnostics.log("unload", { url: tab.incognito ? "(private tab)" : tab.url, result: `switched first, to ${next.incognito ? "(private tab)" : next.url}${next.discarded ? " (it was not loaded)" : ""}` });
+        }
+        doomed.push(id);
       }
       if (doomed.length) await api.tabs.discard(doomed.map((id) => tabByNode.get(id)));
+      // You chose this: remember it even inside the startup window.
       tree.mutate((a) => doomed.forEach((id) => a[id] && (a[id].wasLoaded = false)), "unload");
       return { unloaded: doomed.length, skipped };
-    }, { title: "Unload tabs" });
+    }
+
+    commands.register("tabs:unload", async ({ ids = [], deep = false }) => unloadTabs(liveTabsUnder(ids, deep)), { title: "Unload tabs" });
 
     // Load many unloaded tabs, a few at a time, without switching to them.
     commands.register("tabs:load", async ({ ids = [], deep = false }) => {
@@ -804,6 +869,7 @@ export default {
       },
       teardown() {
         clearInterval(pruneTimer);
+        successorTimers.forEach((timer) => clearTimeout(timer));
         globalThis.removeEventListener?.("online", onOnline);
         api.tabs.onCreated.removeListener(onCreated);
         bus.off("window:opened", onWindowOpened);

@@ -62,6 +62,7 @@ Pinned tabs are not listed by Grove yet, so with the strip hidden they are out o
 | Exports named with date and time, saved into a folder inside Downloads; optional automatic backups | `modules/backup.js` |
 | Notes open in a pane under the tab list (drag the divider), so tabs stay in view | `sidebar/ui/note-editor.js` |
 | Unloaded tabs are shown dimmed; "Unload tab" / "Load tab" in the menu; tabs that were loaded are loaded again after a restart | `modules/tabs.js` |
+| Closing the tab you are looking at goes to the one you used before it (and so on back), skipping tabs that are not loaded; "Unload tab" on the tab you are looking at does the same first | `modules/tabs.js`, `lib/succession.js` |
 | Mute / unmute from the speaker icon; playing-sound hints on panels and collapsed branches | `modules/tabs.js`, `sidebar/ui/tree-view.js` |
 | Export JSON / Markdown / bookmarks HTML; import JSON (merge or replace); notes included | `modules/io.js` |
 | Settings page generated from module-declared schemas, plus a diagnostics log you can switch off | `modules/settings.js`, `modules/diagnostics.js`, `options/` |
@@ -222,6 +223,16 @@ folder, which no extension can delete); searching looks in all of them.
   add it where you drop. Delete, and an *Undo* bar brings back the last thing deleted, folder contents and place included. Arrow keys, Enter, F2, Delete, `/` and Esc work.
 - **Backups**: a JSON export (and so the automatic backups) carries the bookmarks too: all of them, or none (Settings → bookmarks).
   Importing adds the ones you are missing and never removes or replaces any, so importing twice changes nothing. A panel-only export has no bookmarks.
+
+**After a close, or an unload.** Firefox decides which tab to show when the one you are looking at closes, and it can pick a tab that is not loaded (showing it loads it).
+Firefox lets an extension name that tab (`tabs.update`, `successorTabId`), so Grove keeps one named on the tab you are looking at: the one you showed just before it, else
+the one before that, and so on, **never a tab that is not loaded unless nothing else is** (then the most recent of them, since something must be shown), never a tab of another
+panel or folder (those are hidden), never one in another window. Because it is set in advance, it holds however the tab is closed (Ctrl+W, the sidebar, `x`), and the
+unloaded tabs are skipped without being loaded. The order is the order you showed tabs since Grove started (Firefox's own `lastAccessed` orders tabs from before a restart).
+It looks again whenever something that changes the answer happens: you switch tabs, a tab is unloaded, loaded, closed, hidden or shown. Settings → tabs turns it off.
+
+**Unloading the tab you are looking at** is allowed: a tab that is showing cannot be discarded, so Grove shows the same tab that closing it would, then unloads it. With several
+selected (including the one you are on) it goes to a tab that is not among them; if there is no other tab it stays loaded and says so.
 
 Unloaded tabs and bookmarks are different things: an unloaded tab is still a tab (Firefox keeps its entry, its history and its place in the strip), a bookmark
 is just a row of text. A bookmark folder opened as saved tabs sits in between: Grove's own rows, no Firefox tab, until you click.
@@ -407,5 +418,7 @@ Downloads panel instead, which gives a `file://` address.
   container loses the old tab's history (the old tab is kept if it had a page).
 - Link hints look at up to 200,000 elements, for at most 0.4 s, in page order: on a page far bigger than that (a feed scrolled for a long time), what is
   on screen far down may get no label.
+- Which tab follows a close relies on Firefox honouring a tab's successor (documented, but checked only against the fake browser here). If a close still lands on an
+  unloaded tab, a note of which tabs were open (and which unloaded) pins it down.
 - Private windows: see "Private browsing".
 - The tests run against an in-memory fake of the Firefox API, not Firefox itself.

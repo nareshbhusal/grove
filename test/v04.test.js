@@ -166,19 +166,20 @@ test("moving several tabs to another panel hides them together", async () => {
   assert.deepEqual(t.sim.hidden(t.winId).map((x) => x.url).sort(), ["https://b.test/", "https://c.test/"]);
 });
 
-test("tabs:unload and tabs:load work on a folder, a branch and a selection; the active tab is skipped", async () => {
+test("tabs:unload and tabs:load work on a folder, a branch and a selection; the tab you are on is left first", async () => {
   const t = await boot({ seed: [{ url: "https://a.test/", active: true }, { url: "https://b.test/" }, { url: "https://c.test/" }, { url: "https://d.test/" }] });
   const [a, b, c, d] = ["a", "b", "c", "d"].map((x) => t.nodeByUrl(`https://${x}.test/`));
   const f = await t.run("folder:create", { name: "F", panelId: t.panelId, nodeIds: [a, b, c] });
   const r = await t.run("tabs:unload", { ids: [f], deep: true });
   await settle();
-  assert.deepEqual(r, { unloaded: 2, skipped: 1 }, "the tab you are on is skipped");
+  assert.deepEqual(r, { unloaded: 3, skipped: 0 }, "a is shown, so d (loaded, outside the folder) is shown first");
+  assert.equal(t.sim.visible(t.winId).find((x) => x.active).url, "https://d.test/");
   assert.equal(t.m.tree.get(b).discarded, true);
-  assert.equal(t.m.tree.get(a).discarded, false);
+  assert.equal(t.m.tree.get(a).discarded, true);
   assert.equal(t.m.tree.get(d).discarded, false, "outside the folder: untouched");
   assert.equal(t.m.tree.get(b).wasLoaded, false);
 
-  assert.deepEqual(await t.run("tabs:load", { ids: [f] }), { loaded: 2 });
+  assert.deepEqual(await t.run("tabs:load", { ids: [f] }), { loaded: 3 });
   assert.equal(t.m.tree.get(b).discarded, false);
   assert.equal(t.m.tree.get(c).discarded, false);
 
