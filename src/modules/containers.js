@@ -1,9 +1,11 @@
 // containers: configure Firefox containers per panel and per domain.
 //
-//  - A rule maps a domain pattern (optionally limited to one panel) to a
-//    container. Panel-specific rules beat global ones; see lib/rules.js.
-//  - A panel can have a default container, used for NEW blank tabs in it
-//    (a tab that already shows a page is left alone unless a rule matches).
+//  - A rule maps a domain pattern (optionally limited to some panels and folders)
+//    to a container. Folder rules beat panel rules, which beat global ones;
+//    see lib/rules.js.
+//  - A panel, or a folder, can have a default container, used for NEW blank tabs
+//    in it (a tab that already shows a page is left alone unless a rule matches).
+//    A folder's default beats its panel's, and an inner folder's beats an outer one's.
 //
 // Enforcement happens in a blocking webRequest listener: a navigation that
 // belongs in another container is cancelled before any request leaves the
@@ -16,7 +18,7 @@
 // fire" can be answered from the settings page.
 
 import { uid } from "../lib/util.js";
-import { DEFAULT_STORE, explain, compilePattern, normalizePattern, patternKey, migrateRules } from "../lib/rules.js";
+import { DEFAULT_STORE, explain, compilePattern, normalizePattern, patternKey, migrateRules, foldersAbove, rulePanels, ruleFolders } from "../lib/rules.js";
 import { openableUrl } from "./tabs.js";
 
 const BLANK = /^(about:(newtab|blank|home)|)$/i;
@@ -67,18 +69,21 @@ export default {
     }
 
     const ctx = () => ({ rules: rules(), panels: panels.list() });
-    const desiredFor = (url, panelId) => explain(ctx(), url, panelId).containerId;
+    // The folders a tab with this parent sits in, nearest first.
+    const foldersFor = (parentId) => foldersAbove(tree.all(), parentId);
+    const desiredFor = (url, panelId, parentId = null) => explain(ctx(), url, panelId, foldersFor(parentId)).containerId;
 
     // Containers that failed to open recently, so a deleted container does not
     // cause a loop. Entries expire, so one hiccup does not disable it for good.
     const failed = new Map();
     const recentlyFailed = (id) => (failed.get(id) ?? 0) > Date.now();
 
-    // Where a tab Grove is about to open in `panelId` should go: the container a rule
-    // gives for the address, else the panel's own. null = leave it as Firefox opens it.
-    function containerForNew(url, panelId) {
+    // Where a tab Grove is about to open in `panelId` (under `parentId`, a folder or a
+    // tab) should go: the container a rule gives for the address, else the nearest
+    // folder's, else the panel's own. null = leave it as Firefox opens it.
+    function containerForNew(url, panelId, parentId = null) {
       if (!settings.get("containers", "enforce")) return null;
-      const id = desiredFor(url, panelId);
+      const id = desiredFor(url, panelId, parentId);
       if (!id || id === DEFAULT_STORE || recentlyFailed(id)) return null;
       return id;
     }
@@ -90,13 +95,14 @@ export default {
 
     // What should happen to this tab for this URL, and why.
     function decide({ node, tab, url, panelId }) {
-      const hit = explain(ctx(), url, panelId);
+      const hit = explain(ctx(), url, panelId, foldersFor(node?.parentId));
       const out = (action, reason) => ({ action, reason, ...hit });
-      if (hit.containerId == null) return out("none", "no rule matches and the panel has no default container");
-      const why = hit.via === "rule" ? `rule “${hit.rule.pattern}”` : "the panel's default container";
+      if (hit.containerId == null) return out("none", "no rule matches and neither the folders nor the panel have a default container");
+      const whose = hit.via === "folder" ? `the default container of folder “${hit.folder.name || "Folder"}”` : "the panel's default container";
+      const why = hit.via === "rule" ? `rule “${hit.rule.pattern}”` : whose;
       if (tab.cookieStoreId === hit.containerId) return out("skip", `already in the right container (${why})`);
-      if (hit.via === "panel" && !BLANK.test(tab.url ?? "")) {
-        return out("skip", "the panel's default container only applies to new blank tabs");
+      if (hit.via !== "rule" && !BLANK.test(tab.url ?? "")) {
+        return out("skip", `${whose} only applies to new blank tabs`);
       }
       if (settings.get("containers", "respectManual") && node?.containerLocked) {
         return out("skip", "you reopened this tab in a container yourself");
@@ -217,9 +223,9 @@ export default {
       try {
         const node = nodeId ? tree.get(nodeId) : null;
         if (!node || node.private) return;
-        const want = containerForNew("", node.panelId);
+        const want = containerForNew("", node.panelId, node.parentId);
         if (!want || want === tab.cookieStoreId) return;
-        diagnostics.log("route", { url: tab.url, panel: panels.find(node.panelId)?.name ?? "?", tabContainer: tab.cookieStoreId, wanted: want, action: "reroute", reason: "new tab opened in a panel with a default container" });
+        diagnostics.log("route", { url: tab.url, panel: panels.find(node.panelId)?.name ?? "?", tabContainer: tab.cookieStoreId, wanted: want, action: "reroute", reason: "new tab opened where a default container applies" });
         try {
           await reopen(nodeId, want, { closeOld: true });
         } catch (err) {
@@ -300,11 +306,20 @@ export default {
       reopen(id, cookieStoreId, { closeOld: true, lock: true }), { title: "Reopen in container" });
 
     // "What would happen for this URL in this panel?" (used by the settings page)
-    commands.register("containers:test", ({ url, panelId = null }) => {
+    // With a folderId the test is for a tab opened in that folder.
+    commands.register("containers:test", ({ url, panelId = null, folderId = null }) => {
       let u = String(url ?? "").trim();
       if (u && !/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = "https://" + u;
-      const hit = explain(ctx(), u, panelId ?? panels.listFor(false)[0]?.id);
-      return { url: u, containerId: hit.containerId, via: hit.via, pattern: hit.rule?.pattern ?? null };
+      const folder = folderId ? tree.get(folderId) : null;
+      const inFolder = folder?.type === "folder" ? folder : null;
+      const hit = explain(ctx(), u, inFolder?.panelId ?? panelId ?? panels.listFor(false)[0]?.id, inFolder ? foldersFor(inFolder.id) : []);
+      return {
+        url: u,
+        containerId: hit.containerId,
+        via: hit.via,
+        pattern: hit.rule?.pattern ?? null,
+        folder: hit.via === "folder" ? hit.folder.name || "Folder" : null,
+      };
     });
 
     const cleanPattern = (pattern) => {
@@ -313,21 +328,33 @@ export default {
       return cleaned;
     };
 
-    // One rule per pattern; panelIds empty = any panel.
+    // One rule per pattern; no panels and no folders = everywhere.
     const cleanPanels = ({ panelIds, panelId }) => {
       const list = Array.isArray(panelIds) ? panelIds : panelId ? [panelId] : [];
       const known = new Set(panels.listFor(false).map((p) => p.id));
       return [...new Set(list)].filter((id) => known.has(id));
     };
+    const cleanFolders = ({ folderIds }) => {
+      const list = Array.isArray(folderIds) ? folderIds : [];
+      const all = tree.all();
+      return [...new Set(list)].filter((id) => all[id]?.type === "folder" && !all[id].private);
+    };
+    // A rule limited to folders that no longer exist must not turn into a rule for everywhere.
+    const assertScope = (asked, panelIds, folderIds) => {
+      if ((asked.folderIds ?? []).length && !panelIds.length && !folderIds.length) throw new Error("Those folders no longer exist");
+    };
     const assertUnique = (pattern, exceptId = null) => {
       const clash = rules().find((r) => r.id !== exceptId && patternKey(r.pattern) === patternKey(pattern));
-      if (clash) throw new Error(`There is already a rule for “${clash.pattern}”. Edit that one and choose more panels instead.`);
+      if (clash) throw new Error(`There is already a rule for “${clash.pattern}”. Edit that one (Settings → Container rules) and choose more places instead.`);
     };
 
     commands.register("rules:add", ({ pattern, containerId, ...scope }) => {
       const cleaned = cleanPattern(pattern);
       assertUnique(cleaned);
-      const rule = { id: uid("r"), pattern: cleaned, panelIds: cleanPanels(scope), containerId };
+      const panelIds = cleanPanels(scope);
+      const folderIds = cleanFolders(scope);
+      assertScope(scope, panelIds, folderIds);
+      const rule = { id: uid("r"), pattern: cleaned, panelIds, folderIds, containerId };
       store.set("rules", [...rules(), rule]);
       failed.clear();
       return rule.id;
@@ -338,12 +365,22 @@ export default {
         fields.pattern = cleanPattern(fields.pattern);
         assertUnique(fields.pattern, id);
       }
-      if ("panelIds" in fields || "panelId" in fields) fields.panelIds = cleanPanels(fields);
+      // The scope is one thing: changing the panels or the folders restates both.
+      if ("panelIds" in fields || "panelId" in fields || "folderIds" in fields) {
+        const current = rules().find((r) => r.id === id);
+        const ask = {
+          panelIds: "panelIds" in fields || "panelId" in fields ? fields.panelIds ?? (fields.panelId ? [fields.panelId] : []) : rulePanels(current ?? {}),
+          folderIds: "folderIds" in fields ? fields.folderIds : ruleFolders(current ?? {}),
+        };
+        fields.panelIds = cleanPanels(ask);
+        fields.folderIds = cleanFolders(ask);
+        assertScope(ask, fields.panelIds, fields.folderIds);
+      }
       store.set(
         "rules",
         rules().map((r) =>
           r.id === id
-            ? { ...r, ...Object.fromEntries(["pattern", "panelIds", "containerId"].filter((k) => k in fields).map((k) => [k, fields[k]])) }
+            ? { ...r, ...Object.fromEntries(["pattern", "panelIds", "folderIds", "containerId"].filter((k) => k in fields).map((k) => [k, fields[k]])) }
             : r
         )
       );
@@ -364,9 +401,33 @@ export default {
       return true;
     });
 
+    // A folder that is gone takes its place out of every rule; a rule that was only for
+    // folders that are gone goes too (it must not start applying everywhere).
+    function forgetFolders(ids) {
+      const gone = new Set(ids);
+      store.update("rules", (list) => {
+        if (!Array.isArray(list)) return list;
+        return list.filter((r) => {
+          const had = ruleFolders(r);
+          if (!had.some((f) => gone.has(f))) return true;
+          r.folderIds = had.filter((f) => !gone.has(f));
+          return rulePanels(r).length > 0 || r.folderIds.length > 0;
+        });
+      });
+    }
+    const onTreeRemoved = ({ ids }) => forgetFolders(ids);
+    bus.on("tree:removed", onTreeRemoved);
+    {
+      // Folders that vanished while Grove was not running (or from an old backup).
+      const all = tree.all();
+      const stale = rules().flatMap(ruleFolders).filter((id) => all[id]?.type !== "folder");
+      if (stale.length) forgetFolders(stale);
+    }
+
     return {
-      exports: { listContainers, desiredFor, containerForNew, noteFailed, reopen, route, decide },
+      exports: { listContainers, desiredFor, foldersFor, containerForNew, noteFailed, reopen, route, decide },
       teardown() {
+        bus.off("tree:removed", onTreeRemoved);
         bus.off("tab:created", onCreated);
         bus.off("tab:updated", onUpdated);
         bus.off("tab:removed", onRemovedTab);

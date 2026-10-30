@@ -1,6 +1,13 @@
 // Pure container-rule matching. A rule says "URLs matching X, opened in any of
-// these panels (or in any panel), belong in container Z". There is one rule per
-// pattern: to cover several panels, list them in the one rule.
+// these panels and folders (or anywhere), belong in container Z". There is one
+// rule per pattern: to cover several places, list them in the one rule.
+//
+// Where a tab opens decides which rule wins, most specific first:
+//   a rule for a folder the tab is in (the nearest folder first, then those around it)
+//   a rule for the tab's panel
+//   a rule for anywhere
+// With no rule at all, the default container of the nearest folder that has one
+// applies, else the panel's.
 //
 // Pattern syntax (scheme, port, query and trailing slash are ignored, so a
 // pasted https://example.com/ works):
@@ -82,20 +89,44 @@ export function rulePanels(rule) {
   return rule.panelId ? [rule.panelId] : [];
 }
 
+// The folders a rule is limited to (the rule also covers everything inside them).
+export const ruleFolders = (rule) => (Array.isArray(rule.folderIds) ? rule.folderIds : []);
+
+// A rule with no panel and no folder applies everywhere.
+export const isGlobal = (rule) => rulePanels(rule).length === 0 && ruleFolders(rule).length === 0;
+
+// The folders a node sits in, nearest first, starting from its parent `parentId`
+// (which may itself be a folder, or a tab that sits in one).
+export function foldersAbove(nodes, parentId) {
+  const out = [];
+  const seen = new Set();
+  for (let id = parentId; id && nodes[id] && !seen.has(id); id = nodes[id].parentId) {
+    seen.add(id);
+    if (nodes[id].type === "folder") out.push(nodes[id]);
+  }
+  return out;
+}
+
 // Two patterns that differ only in case, scheme, port or a trailing slash are the same pattern.
 export const patternKey = (pattern) => normalizePattern(pattern).toLowerCase();
 
-// Returns the matching rule, or null. Rules limited to the current panel win over
-// rules that apply to any panel; within each group, list order decides.
-export function findRule(rules, url, panelId) {
+// Returns the matching rule, or null. `folders` are the folders the tab is in,
+// nearest first. Within each level, list order decides.
+export function findRule(rules, url, panelId, folders = []) {
   const host = hostname(url);
   const matches = (rule) => {
     const test = compilePattern(rule.pattern);
     return !!test && test(url, host);
   };
-  const scoped = rules.filter((r) => rulePanels(r).includes(panelId));
-  const global = rules.filter((r) => rulePanels(r).length === 0);
-  return scoped.find(matches) ?? global.find(matches) ?? null;
+  for (const f of folders) {
+    const hit = rules.find((r) => ruleFolders(r).includes(f.id) && matches(r));
+    if (hit) return hit;
+  }
+  return (
+    rules.find((r) => rulePanels(r).includes(panelId) && matches(r)) ??
+    rules.find((r) => isGlobal(r) && matches(r)) ??
+    null
+  );
 }
 
 // Bring rules saved by older versions into the one-rule-per-pattern shape.
@@ -113,29 +144,34 @@ export function migrateRules(rules) {
   const out = [];
   const dropped = [];
   for (const list of groups.values()) {
-    const winner = list.find((r) => rulePanels(r).length) ?? list[0];
+    const winner = list.find((r) => !isGlobal(r)) ?? list[0];
     const same = list.filter((r) => r.containerId === winner.containerId);
     dropped.push(...list.filter((r) => !same.includes(r)));
-    const anyPanel = same.some((r) => rulePanels(r).length === 0);
-    const panelIds = anyPanel ? [] : [...new Set(same.flatMap(rulePanels))];
-    out.push({ id: same[0].id, pattern: same[0].pattern, panelIds, containerId: winner.containerId });
+    const everywhere = same.some(isGlobal);
+    const panelIds = everywhere ? [] : [...new Set(same.flatMap(rulePanels))];
+    const folderIds = everywhere ? [] : [...new Set(same.flatMap(ruleFolders))];
+    out.push({ id: same[0].id, pattern: same[0].pattern, panelIds, folderIds, containerId: winner.containerId });
   }
   return { rules: out, dropped };
 }
 
-// Explain the decision for a URL opened in a panel:
-//   { containerId, via: "rule" | "panel" | "none", rule }
-// containerId is null when there is no opinion (leave the tab alone).
-export function explain({ rules, panels }, url, panelId) {
-  const rule = findRule(rules, url, panelId);
-  if (rule) return { containerId: rule.containerId, via: "rule", rule };
+// Explain the decision for a URL opened in a panel (and, optionally, inside folders,
+// nearest first):
+//   { containerId, via: "rule" | "folder" | "panel" | "none", rule, folder }
+// containerId is null when there is no opinion (leave the tab alone). A folder's
+// defaultContainer of null means "same as the folder around it".
+export function explain({ rules, panels }, url, panelId, folders = []) {
+  const rule = findRule(rules, url, panelId, folders);
+  if (rule) return { containerId: rule.containerId, via: "rule", rule, folder: null };
+  const folder = folders.find((f) => f.defaultContainer);
+  if (folder) return { containerId: folder.defaultContainer, via: "folder", rule: null, folder };
   const dflt = panels.find((p) => p.id === panelId)?.defaultContainer ?? null;
-  if (dflt) return { containerId: dflt, via: "panel", rule: null };
-  return { containerId: null, via: "none", rule: null };
+  if (dflt) return { containerId: dflt, via: "panel", rule: null, folder: null };
+  return { containerId: null, via: "none", rule: null, folder: null };
 }
 
 // Decide which cookieStoreId a URL should open in.
 // Returns null when no opinion (leave the tab alone).
-export function resolveContainer(ctx, url, panelId) {
-  return explain(ctx, url, panelId).containerId;
+export function resolveContainer(ctx, url, panelId, folders = []) {
+  return explain(ctx, url, panelId, folders).containerId;
 }

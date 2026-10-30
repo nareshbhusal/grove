@@ -361,12 +361,12 @@ export default {
     }
 
     // Create a tab Grove is opening in `panelId`, straight into the container that
-    // panel (or a rule for this address) asks for, so it never opens in the wrong
+    // its folder, its panel (or a rule for this address) asks for, so it never opens in the wrong
     // one first. An explicit cookieStoreId wins. If the container cannot be used
     // (deleted, say) the tab opens normally instead of not at all.
     async function createTabIn(props, claim, panelId) {
       const containers = modules.containers; // loads after this module: looked up when needed
-      const want = props.cookieStoreId ? null : containers?.containerForNew(props.url ?? "", panelId);
+      const want = props.cookieStoreId ? null : containers?.containerForNew(props.url ?? "", panelId, claim?.placement?.parentId ?? null);
       if (want) {
         try {
           return await createTab({ ...props, cookieStoreId: want }, claim);

@@ -6,6 +6,7 @@ import { createTreeView, viewOf } from "./ui/tree-view.js";
 import { createPanelBar } from "./ui/panel-bar.js";
 import { createBreadcrumb } from "./ui/breadcrumb.js";
 import { createContextMenu } from "./ui/context-menu.js";
+import { createFolderContainers } from "./ui/folder-containers.js";
 import { createNoteEditor } from "./ui/note-editor.js";
 import { createSearchBar } from "./ui/search-bar.js";
 import { askText } from "./ui/dialog.js";
@@ -25,7 +26,9 @@ const menu = createContextMenu({
   root: $("menu"),
   getContainers: () => tree.getContainers(),
   getWindowId,
+  onFolderContainers: (id) => folderContainers.show(id),
 });
+const folderContainers = createFolderContainers({ getState, getContainers: () => tree.getContainers() });
 
 // A note opens in a pane under the list; the tabs stay in view while you read it.
 const editor = createNoteEditor({
@@ -165,6 +168,7 @@ function renderAll() {
   tree.render();
   hover.refresh();
   marks.redraw();
+  folderContainers.refresh();
 }
 
 async function main() {

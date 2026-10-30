@@ -6,7 +6,8 @@
 //   ui: "prompt"   { title, initial, field, command, args, withWindow }
 //   ui: "confirm"  { message, okLabel, command, args }
 //   ui: "bookmark" { args: { ids }, initial, count }  asks which bookmark folder, then saves there
-//   submenu: "containers"
+//   submenu: "containers"            { args: {id} }            reopen a tab in a container
+//   ui: "folderContainers" { args: {id} }              opens the folder's container dialog (default + site rules)
 // Local item kinds: { label, onSelect, danger }, { separator }, { heading },
 //   { swatches: [colours], current, onPick }
 
@@ -14,7 +15,7 @@ import { h, run, cmd } from "./client.js";
 import { askText, askConfirm } from "./dialog.js";
 import { pickBookmarkFolder } from "./bookmark-picker.js";
 
-export function createContextMenu({ root, getContainers, getWindowId }) {
+export function createContextMenu({ root, getContainers, getWindowId, onFolderContainers = () => {} }) {
   function hide() {
     root.hidden = true;
     root.replaceChildren();
@@ -106,6 +107,9 @@ export function createContextMenu({ root, getContainers, getWindowId }) {
           show(e, [{ heading: "Reopen in container" }, ...list]);
         },
       };
+    }
+    if (item.ui === "folderContainers") {
+      return { ...item, onSelect: () => onFolderContainers(item.args.id) };
     }
     return { ...item, onSelect: () => run(item.command, withWindow(item.args)) };
   }

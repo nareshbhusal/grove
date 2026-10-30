@@ -241,9 +241,12 @@ Limit: Grove shows favicons only for sites that are open in a tab (it does not f
 
 ### Container rules
 
-A rule maps an address pattern to a container, in the panels you tick (none ticked =
-every panel). There is one rule per pattern; so the same site cannot go to different
-containers in different panels, but one rule can cover as many panels as you like.
+A rule maps an address pattern to a container, in the panels and folders you tick (none
+ticked = anywhere; a folder includes the folders inside it). There is one rule per pattern;
+so the same site cannot go to different containers in different places, but one rule can
+cover as many panels and folders as you like. The most specific place wins: a rule for a
+folder the tab is in (the nearest folder first), then a rule for its panel, then an
+anywhere rule.
 Rules saved by earlier versions are merged on upgrade (the old list is kept under
 `rulesBefore`, and any rule that had to be dropped is listed in Diagnostics).
 Patterns: `example.com`, `=example.com`, `*.example.com`, `example.com/work`
@@ -253,8 +256,16 @@ yourself ("Reopen in container…"). A panel's default container is where tabs
 opened in that panel start: tabs Grove opens (the + button, dropped links, searches) go
 straight into it, and a new tab you open yourself (Ctrl+T) is swapped for an empty one in it.
 A tab that already shows a page, or is loading a link, is not moved by it; a rule for its
-address still is. The settings page has a tester ("what happens for this
-address in this panel?") and a log of recent routing decisions.
+address still is. A folder can have a default container too, and its own site rules: right-click the
+folder → "Containers for this folder…" sets both (the default for new tabs, and a list of
+sites that open in a container while in the folder). The same can be done from Settings
+(Panels → Folders, and Container rules). The folder default: it beats the panel's, a subfolder beats the
+folder around it, and "No container" is a choice of its own, not "inherit". Tabs that sit
+under a tab in a folder count as being in the folder. A rule always beats a default.
+Deleting or ungrouping a folder removes it from the rules that named it, and a rule that was
+only for that folder goes with it. Export and import carry folder containers and folder rules
+(folders are matched up inside the file, containers by name). The settings page has a tester
+("what happens for this address in this panel or folder?") and a log of recent routing decisions.
 
 ## Private browsing
 
@@ -420,5 +431,8 @@ Downloads panel instead, which gives a `file://` address.
   on screen far down may get no label.
 - Which tab follows a close relies on Firefox honouring a tab's successor (documented, but checked only against the fake browser here). If a close still lands on an
   unloaded tab, a note of which tabs were open (and which unloaded) pins it down.
+- **Keys, hints and find on `file:` pages need a switch of yours (Firefox 153 and later).** Firefox keeps every add-on out of local files until you turn on, for that
+  add-on, "Access local files on your computer" (about:addons, choose Grove, Permissions and data). It is per add-on, so another add-on having it on does not help, and an
+  add-on cannot turn it on for you. Until then nothing of Grove runs on a `file:` page. (Firefox's built-in PDF viewer runs no add-on scripts at all, so a PDF has no page keys either way; the sidebar's keys work everywhere.)
 - Private windows: see "Private browsing".
 - The tests run against an in-memory fake of the Firefox API, not Firefox itself.

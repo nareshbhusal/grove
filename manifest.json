@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Grove",
-  "version": "0.16.0",
+  "version": "0.17.2",
   "description": "Tree-style tabs, switchable panels, per-domain containers and tab folders. Modular and extensible.",
   "icons": {
     "48": "icons/icon.svg",

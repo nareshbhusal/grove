@@ -17,7 +17,7 @@
 
 import { uid } from "../lib/util.js";
 import * as T from "../lib/tree.js";
-import { migrateRules, rulePanels, patternKey } from "../lib/rules.js";
+import { migrateRules, rulePanels, ruleFolders, isGlobal, patternKey } from "../lib/rules.js";
 
 export const FORMAT_VERSION = 1;
 
@@ -71,7 +71,7 @@ export function toNetscape(panels) {
   return out.join("\n") + "\n";
 }
 
-const KEEP = ["type", "url", "title", "customTitle", "name", "collapsed", "cookieStoreId", "pinned", "favIconUrl"];
+const KEEP = ["type", "url", "title", "customTitle", "name", "collapsed", "cookieStoreId", "defaultContainer", "pinned", "favIconUrl"];
 const pickPersistent = (n) => Object.fromEntries(KEEP.filter((k) => n[k] !== undefined && n[k] !== null).map((k) => [k, n[k]]));
 
 export default {
@@ -85,7 +85,11 @@ export default {
       const nodes = T.withoutPrivate(tree.all()); // private tabs are never exported
       const noteIds = Object.values(nodes).filter((n) => n.type === "note").map((n) => n.id);
       const text = await notes.bodies(noteIds);
-      const pick = (n) => (n.type === "note" ? { ...pickPersistent(n), text: text[n.id] ?? "" } : pickPersistent(n));
+      // A folder carries its id as `ref`, so rules that name it can find it again on import.
+      const pick = (n) =>
+        n.type === "note" ? { ...pickPersistent(n), text: text[n.id] ?? "" }
+        : n.type === "folder" ? { ...pickPersistent(n), ref: n.id }
+        : pickPersistent(n);
       return panelIds
         .map((id) => panels.find(id))
         .filter((p) => p && !p.private)
@@ -123,7 +127,11 @@ export default {
       const used = new Set();
       for (const { panel, forest } of data) {
         if (panel.defaultContainer) used.add(panel.defaultContainer);
-        const walk = (list) => list.forEach((n) => { if (n.cookieStoreId) used.add(n.cookieStoreId); walk(n.children); });
+        const walk = (list) => list.forEach((n) => {
+          if (n.cookieStoreId) used.add(n.cookieStoreId);
+          if (n.defaultContainer) used.add(n.defaultContainer);
+          walk(n.children);
+        });
         walk(forest);
       }
       if (scope === "all") {
@@ -161,6 +169,10 @@ export default {
         const type = n.type === "folder" ? "folder" : n.type === "note" ? "note" : "tab";
         const picked = pickPersistent(n);
         if (picked.cookieStoreId) picked.cookieStoreId = mapContainer(picked.cookieStoreId);
+        if (type === "folder") {
+          if (picked.defaultContainer) picked.defaultContainer = mapContainer(picked.defaultContainer);
+          if (typeof n.ref === "string") picked.ref = n.ref; // see below: rules find their folders by it
+        } else delete picked.defaultContainer;
         return {
           ...picked,
           ...(type === "note" ? { text: String(n.text ?? "") } : {}),
@@ -277,6 +289,7 @@ export default {
       }
 
       const bodies = [];
+      const folderRefs = new Map(); // a folder's id in the file -> its id here
       const added = new Map(); // panel here -> how many top-level nodes this import has put in it
       tree.mutate((all) => {
         incoming.forEach((_, i) => {
@@ -289,6 +302,10 @@ export default {
             if (n.type === "note") {
               bodies.push([n.id, n.text]);
               delete n.text;
+            }
+            if (n.ref !== undefined) {
+              if (n.type === "folder") folderRefs.set(n.ref, n.id);
+              delete n.ref;
             }
             all[n.id] = n;
           }
@@ -304,23 +321,35 @@ export default {
       if (mode === "replace" || !panelId) {
         if (Array.isArray(payload.rules)) {
           const known = new Set(allPanels.map((p) => p.id));
-          // Panels follow to their ids in this profile, containers by name; old files had a single panelId.
-          const incomingRules = migrateRules(payload.rules.filter((r) => r && typeof r === "object")).rules.map((r) => ({
-            ...r,
-            id: r.id ?? uid("r"),
-            panelIds: rulePanels(r).map((id) => panelIdMap.get(id) ?? id).filter((id) => known.has(id)),
-            containerId: r.containerId ? mapContainer(r.containerId) : r.containerId,
-          }));
+          // Panels and folders follow to their ids in this profile, containers by name; old files had a single panelId.
+          // A rule limited to places that did not come along would turn into a rule for everywhere: it is skipped.
+          const incomingRules = [];
+          for (const r of migrateRules(payload.rules.filter((x) => x && typeof x === "object")).rules) {
+            const panelIds = rulePanels(r).map((id) => panelIdMap.get(id) ?? id).filter((id) => known.has(id));
+            const folderIds = ruleFolders(r).map((id) => folderRefs.get(id)).filter(Boolean);
+            if (!isGlobal(r) && !panelIds.length && !folderIds.length) { rulesSkipped++; continue; }
+            incomingRules.push({
+              ...r,
+              id: r.id ?? uid("r"),
+              panelIds,
+              folderIds,
+              containerId: r.containerId ? mapContainer(r.containerId) : r.containerId,
+            });
+          }
           if (mode === "replace") {
             store.set("rules", incomingRules);
           } else {
-            // One rule per pattern: same container = widen the panels, different container = keep yours.
+            // One rule per pattern: same container = widen where it applies, different container = keep yours.
             const next = store.get("rules").map((r) => ({ ...r }));
             for (const inc of incomingRules) {
               const mine = next.find((r) => patternKey(r.pattern) === patternKey(inc.pattern));
               if (!mine) next.push(inc);
               else if (mine.containerId === inc.containerId) {
-                mine.panelIds = rulePanels(mine).length && rulePanels(inc).length ? [...new Set([...mine.panelIds, ...inc.panelIds])] : [];
+                if (isGlobal(mine) || isGlobal(inc)) { mine.panelIds = []; mine.folderIds = []; }
+                else {
+                  mine.panelIds = [...new Set([...rulePanels(mine), ...rulePanels(inc)])];
+                  mine.folderIds = [...new Set([...ruleFolders(mine), ...ruleFolders(inc)])];
+                }
               } else rulesSkipped++;
             }
             store.set("rules", next);

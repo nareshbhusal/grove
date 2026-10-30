@@ -1,5 +1,6 @@
 import { connect, cmd, h, toast } from "../sidebar/ui/client.js";
-import { patternKey, rulePanels } from "../lib/rules.js";
+import { patternKey, rulePanels, ruleFolders } from "../lib/rules.js";
+import * as T from "../lib/tree.js";
 
 let state = null;
 let containers = [];
@@ -28,7 +29,7 @@ const holdWhileFocused = (input, key) => {
 };
 
 // What is typed into the "new rule" and "test" rows survives any redraw.
-const draft = { pattern: "", panels: [], container: "", testUrl: "", testPanel: "" };
+const draft = { pattern: "", panels: [], folders: [], container: "", testUrl: "", testPlace: "" };
 
 const $ = (id) => document.getElementById(id);
 
@@ -53,6 +54,53 @@ function containerSelect(value, onChange, { none = "No container" } = {}) {
   return sel;
 }
 
+// The folders of a panel, outermost first, each with how deep it sits. (Folders only
+// ever sit in folders, so walking through folders reaches them all.)
+function foldersOf(panelId) {
+  const out = [];
+  const walk = (parentId, depth) => {
+    for (const n of T.childrenOf(state.nodes, parentId, panelId)) {
+      if (n.type !== "folder") continue;
+      out.push({ node: n, depth });
+      walk(n.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
+// A folder's container: empty = the same as whatever is around it.
+function folderContainerSelect(value, onChange) {
+  const sel = h("select", { onchange: (e) => onChange(e.target.value || null) },
+    h("option", { value: "" }, "Same as around it"),
+    h("option", { value: "firefox-default" }, "No container"),
+    ...containers.filter((c) => c.cookieStoreId !== "firefox-default").map((c) => h("option", { value: c.cookieStoreId }, c.name)));
+  sel.value = value ?? "";
+  return sel;
+}
+
+function renderFolders() {
+  const rows = [h("div", { class: "head" }, "Folder"), h("div", { class: "head" }, "New tabs open in")];
+  let any = false;
+  for (const p of state.panels) {
+    const list = foldersOf(p.id);
+    if (!list.length) continue;
+    any = true;
+    rows.push(h("div", { class: "head panel-name" }, p.name), h("div", {}));
+    for (const { node, depth } of list) {
+      rows.push(
+        h("div", { class: "folder-name", style: { paddingLeft: `${depth * 16}px` } }, node.name || "Folder"),
+        folderContainerSelect(node.defaultContainer, (v) => report(cmd("folder:setContainer", { id: node.id, defaultContainer: v })))
+      );
+    }
+  }
+  return [
+    h("h3", { style: { margin: "18px 0 6px", fontSize: "13px" } }, "Folders"),
+    h("p", { class: "hint" }, "A folder can have a container of its own, used for new tabs opened in it. It beats the panel's, and a subfolder beats the folder around it. You can also set it from a folder's right-click menu."),
+    any ? h("div", { class: "grid folders" }, ...rows) : h("p", { class: "hint" }, "No folders yet."),
+  ];
+}
+
 function renderPanels() {
   const body = $("panels-body");
   const rows = [h("div", { class: "head" }), h("div", { class: "head" }, "Name"), h("div", { class: "head" }, "New tabs open in"), h("div", { class: "head" })];
@@ -69,40 +117,61 @@ function renderPanels() {
   body.replaceChildren(
     h("p", { class: "hint" }, "Panels are separate contexts. Switching panels hides the tabs of the others. A panel's container applies to tabs you open in it."),
     h("div", { class: "grid panels" }, ...rows),
-    h("div", { class: "row-actions" }, h("button", { onclick: () => report(cmd("panel:create", { name: "New panel" })) }, "Add panel"))
+    h("div", { class: "row-actions" }, h("button", { onclick: () => report(cmd("panel:create", { name: "New panel" })) }, "Add panel")),
+    ...renderFolders()
   );
 }
 
 function renderRules() {
   const body = $("rules-body");
-  const rows = [h("div", { class: "head" }, "Domain pattern"), h("div", { class: "head" }, "In panels"), h("div", { class: "head" }, "Container"), h("div", { class: "head" })];
-  // Which panels a rule applies to: none ticked = any panel.
-  const panelPicker = (selected, onChange) => {
-    let chosen = [...selected];
+  const rows = [h("div", { class: "head" }, "Domain pattern"), h("div", { class: "head" }, "Applies in"), h("div", { class: "head" }, "Container"), h("div", { class: "head" })];
+  // Where a rule applies: panels and folders (a folder includes everything inside it).
+  // Nothing ticked = anywhere. `selected` and `onChange` use { panels: [ids], folders: [ids] }.
+  const scopePicker = (selected, onChange) => {
+    let chosen = { panels: [...selected.panels], folders: [...selected.folders] };
     const summary = h("summary", {});
     const label = () => {
-      const names = chosen.map((id) => state.panels.find((p) => p.id === id)?.name).filter(Boolean);
-      summary.textContent = names.length ? names.join(", ") : "Any panel";
+      const names = [
+        ...chosen.panels.map((id) => state.panels.find((p) => p.id === id)?.name),
+        ...chosen.folders.map((id) => state.nodes[id]?.name || (state.nodes[id] ? "Folder" : null)),
+      ].filter(Boolean);
+      summary.textContent = names.length ? names.join(", ") : "Anywhere";
     };
-    const boxes = new Map();
-    const sync = () => { for (const [id, box] of boxes) box.checked = id === "any" ? chosen.length === 0 : chosen.includes(id); label(); };
-    const item = (id, text) => {
+    const boxes = new Map(); // "any" | "p:<id>" | "f:<id>"
+    const sync = () => {
+      for (const [key, box] of boxes) {
+        box.checked = key === "any" ? !chosen.panels.length && !chosen.folders.length
+          : key.startsWith("p:") ? chosen.panels.includes(key.slice(2)) : chosen.folders.includes(key.slice(2));
+      }
+      label();
+    };
+    const item = (key, text, depth = 0) => {
       const box = h("input", { type: "checkbox", onchange: () => {
-        if (id === "any") chosen = [];
-        else chosen = box.checked ? [...chosen, id] : chosen.filter((x) => x !== id);
+        const id = key.slice(2);
+        if (key === "any") chosen = { panels: [], folders: [] };
+        else {
+          const field = key.startsWith("p:") ? "panels" : "folders";
+          chosen[field] = box.checked ? [...chosen[field], id] : chosen[field].filter((x) => x !== id);
+        }
         sync();
-        onChange([...chosen]);
+        onChange({ panels: [...chosen.panels], folders: [...chosen.folders] });
       } });
-      boxes.set(id, box);
-      return h("label", {}, box, text);
+      boxes.set(key, box);
+      return h("label", { style: { paddingLeft: `${8 + depth * 16}px` } }, box, text);
     };
-    const el = h("details", { class: "picker" }, summary, h("div", { class: "picker-list" }, item("any", "Any panel"), ...state.panels.map((p) => item(p.id, p.name))));
+    const list = [item("any", "Anywhere")];
+    for (const p of state.panels) {
+      list.push(item(`p:${p.id}`, p.name));
+      for (const { node, depth } of foldersOf(p.id)) list.push(item(`f:${node.id}`, node.name || "Folder", depth + 1));
+    }
+    const el = h("details", { class: "picker" }, summary, h("div", { class: "picker-list" }, ...list));
     // Keep the list open while you tick several; any redraw that was held back
     // happens once it closes (and never touches what you typed elsewhere).
     el.addEventListener("toggle", () => (el.open ? hold(el) : release(el)));
     sync();
     return el;
   };
+  const scopeOf = (r) => ({ panels: rulePanels(r), folders: ruleFolders(r) });
 
   for (const r of state.rules) {
     const input = holdWhileFocused(h("input", { type: "text", value: r.pattern, spellcheck: "false" }), `rule:${r.id}`);
@@ -117,7 +186,7 @@ function renderRules() {
     });
     rows.push(
       input,
-      panelPicker(rulePanels(r), (ids) => report(cmd("rules:update", { id: r.id, panelIds: ids }))),
+      scopePicker(scopeOf(r), (sc) => report(cmd("rules:update", { id: r.id, panelIds: sc.panels, folderIds: sc.folders }))),
       containerSelect(r.containerId, (v) => report(cmd("rules:update", { id: r.id, containerId: v ?? "firefox-default" })), { none: "No container" }),
       h("button", { class: "danger", onclick: () => report(cmd("rules:remove", { id: r.id })) }, "Remove")
     );
@@ -125,13 +194,13 @@ function renderRules() {
 
   // The new-rule row reads from and writes to `draft`, so a redraw rebuilds it as it was.
   const pattern = holdWhileFocused(h("input", { type: "text", placeholder: "github.com", spellcheck: "false", value: draft.pattern }), "new-pattern");
-  const panel = panelPicker(draft.panels, (ids) => (draft.panels = ids));
+  const panel = scopePicker({ panels: draft.panels, folders: draft.folders }, (sc) => { draft.panels = sc.panels; draft.folders = sc.folders; });
   const container = containerSelect(draft.container || null, (v) => (draft.container = v ?? ""));
   const add = h("button", { class: "primary", onclick: async () => {
     if (!pattern.value.trim()) return toast("Enter a domain pattern");
     try {
-      await cmd("rules:add", { pattern: pattern.value, panelIds: draft.panels, containerId: container.value || "firefox-default" });
-      draft.pattern = pattern.value = ""; // panels and container stay: the next rule is often for the same ones
+      await cmd("rules:add", { pattern: pattern.value, panelIds: draft.panels, folderIds: draft.folders, containerId: container.value || "firefox-default" });
+      draft.pattern = pattern.value = ""; // places and container stay: the next rule is often for the same ones
       showClash();
     } catch (e) {
       toast(e.message);
@@ -142,7 +211,7 @@ function renderRules() {
   const clash = h("p", { class: "hint warn", "aria-live": "polite" });
   function showClash() {
     const hit = pattern.value.trim() && state.rules.find((r) => patternKey(r.pattern) === patternKey(pattern.value));
-    clash.textContent = hit ? `There is already a rule for “${hit.pattern}”. Edit it above and tick more panels instead.` : "";
+    clash.textContent = hit ? `There is already a rule for “${hit.pattern}”. Edit it above and tick more places instead.` : "";
     add.disabled = !!hit;
   }
   pattern.addEventListener("input", () => { draft.pattern = pattern.value; showClash(); });
@@ -154,7 +223,7 @@ function renderRules() {
       h("code", {}, "=example.com"), " only that host, ", h("code", {}, "*.example.com"), " subdomains only, ",
       h("code", {}, "example.com/work"), " only that path and below, ",
       h("code", {}, "/regex/"), " tests the full URL. A pasted address works too (https:// and a trailing slash are ignored). ",
-      "Each pattern has one rule; tick the panels it applies to (none ticked = every panel). A rule limited to the current panel beats an any-panel rule; otherwise the first match wins. ",
+      "Each pattern has one rule; tick the panels and folders it applies to (none ticked = anywhere; a folder includes the folders inside it). A rule for the folder a tab is in beats a rule for its panel, which beats an anywhere rule; otherwise the first match wins. ",
       "Rules apply to every tab, including ones already in a container, except tabs you reopened in a container yourself."),
     state.rules.length ? h("div", { class: "grid rules" }, ...rows) : h("p", { class: "hint" }, "No rules yet."),
     h("div", { class: "grid rules", style: { marginTop: "12px" } }, pattern, panel, container, add),
@@ -173,29 +242,36 @@ function renderRules() {
 // "What would happen if I opened this address in this panel?"
 function ruleTester() {
   const url = holdWhileFocused(h("input", { type: "text", placeholder: "Try an address, e.g. github.com/acme/repo", spellcheck: "false", value: draft.testUrl }), "test-url");
-  const panel = h("select", {}, ...state.panels.map((p) => h("option", { value: p.id }, p.name)));
-  if (state.panels.some((p) => p.id === draft.testPanel)) panel.value = draft.testPanel;
+  // Test as if opened in a panel, or inside one of its folders.
+  const place = h("select", {}, ...state.panels.flatMap((p) => [
+    h("option", { value: `p:${p.id}` }, p.name),
+    ...foldersOf(p.id).map(({ node, depth }) => h("option", { value: `f:${node.id}` }, `${p.name} › ${"– ".repeat(depth)}${node.name || "Folder"}`)),
+  ]));
+  if ([...place.options].some((o) => o.value === draft.testPlace)) place.value = draft.testPlace;
   const out = h("p", { class: "hint", "aria-live": "polite" });
   const test = async () => {
     if (!url.value.trim()) return (out.textContent = "");
     try {
-      const r = await cmd("containers:test", { url: url.value, panelId: panel.value });
+      const where = place.value.startsWith("f:") ? { folderId: place.value.slice(2) } : { panelId: place.value.slice(2) };
+      const r = await cmd("containers:test", { url: url.value, ...where });
       const name = r.containerId ? containers.find((c) => c.cookieStoreId === r.containerId)?.name ?? r.containerId : null;
       out.textContent = !r.containerId
-        ? "No rule matches, and the panel has no default container: it opens as usual."
+        ? "No rule matches, and neither the folders nor the panel have a default container: it opens as usual."
         : r.via === "rule"
           ? `Opens in “${name}” (rule ${r.pattern}).`
-          : `Opens in “${name}” (the panel's default container, for new blank tabs).`;
+          : r.via === "folder"
+            ? `Opens in “${name}” (the default container of the folder “${r.folder}”, for new blank tabs).`
+            : `Opens in “${name}” (the panel's default container, for new blank tabs).`;
     } catch (e) {
       out.textContent = e.message;
     }
   };
   url.addEventListener("input", () => { draft.testUrl = url.value; test(); });
-  panel.addEventListener("change", () => { draft.testPanel = panel.value; test(); });
+  place.addEventListener("change", () => { draft.testPlace = place.value; test(); });
   test();
   return h("div", { style: { marginTop: "16px" } },
     h("h3", { style: { margin: "0 0 6px", fontSize: "13px" } }, "Test"),
-    h("div", { class: "grid rules", style: { gridTemplateColumns: "1fr 170px" } }, url, panel), out);
+    h("div", { class: "grid rules", style: { gridTemplateColumns: "1fr 230px" } }, url, place), out);
 }
 
 function renderSettings() {

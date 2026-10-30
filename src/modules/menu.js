@@ -95,6 +95,7 @@ export default {
           const asleep = inside.filter((n) => n.discarded).length;
           if (awake) out.push({ id: "unload-inside", label: `Unload all tabs inside (${awake})`, command: "tabs:unload", args: { ids: [id], deep: true } });
           if (asleep) out.push({ id: "load-inside", label: `Load all tabs inside (${asleep})`, command: "tabs:load", args: { ids: [id], deep: true } });
+          if (!node.private) out.push({ id: "folder-containers", label: "Containers for this folder…", ui: "folderContainers", args: { id } });
           out.push({ id: "rename", label: "Rename…", ui: "rename", args: { id }, current: node.name || "" });
         } else {
           out.push({ id: "rename", label: "Rename…", ui: "rename", args: { id }, current: node.name || "" });

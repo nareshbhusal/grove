@@ -11,6 +11,9 @@
 //   folder:up     { windowId }         one level up (or the panel's top level)
 //   folder:ungroup { id }              contents move up, folder is removed
 //   folder:delete  { id, contents }    contents: remove everything inside too
+//   folder:setContainer { id, defaultContainer }
+//       The container new tabs in this folder open in. null = same as the folder
+//       or panel around it; "firefox-default" = no container, whatever is around.
 
 import { uid } from "../lib/util.js";
 import * as T from "../lib/tree.js";
@@ -85,6 +88,17 @@ export default {
       if (contents || closeTabs) return commands.run("tab:close", { id, mode: "subtree" });
       return ungroup(id);
     }, { title: "Delete folder" });
+
+    commands.register("folder:setContainer", ({ id, defaultContainer = null }) => {
+      const n = tree.get(id);
+      if (!n || n.type !== "folder" || n.private) return false; // the private space opens no containers
+      const value = typeof defaultContainer === "string" && defaultContainer ? defaultContainer : null;
+      tree.mutate((all) => {
+        if (value) all[id].defaultContainer = value;
+        else delete all[id].defaultContainer;
+      }, "folder-container");
+      return true;
+    }, { title: "Set folder container" });
 
     return {};
   },
