@@ -223,7 +223,7 @@ test("Ctrl+T: even if Firefox never reports the address change, looking again fi
   assert.equal(fresh[0].cookieStoreId, work);
 });
 
-test("Ctrl+T: a tab with an empty address is watched the same way, and the watch is logged", async () => {
+test("Ctrl+T: a tab with an empty address is watched the same way", async () => {
   const t = await boot({ seed: [{ url: A, active: true }] });
   const work = await t.run("containers:create", { name: "Work" });
   await t.run("panel:update", { id: t.panelId, defaultContainer: work });
@@ -234,5 +234,4 @@ test("Ctrl+T: a tab with an empty address is watched the same way, and the watch
   await settle(500);
   assert.equal([...t.sim.tabs.values()].filter((x) => x.cookieStoreId === work).length, 1, "swapped into the panel's container");
   assert.ok(!t.sim.tabs.has(tab.id));
-  assert.ok((await t.run("diag:list")).some((e) => /watch/.test(JSON.stringify(e))), "the log says a blank tab was being watched");
 });

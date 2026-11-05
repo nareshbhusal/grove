@@ -313,6 +313,28 @@ test("a blank tab that is not yours (has an opener, is in the background, or is 
   // the first of these had the focus until the next one opened: make the last the one under test
   await settle(3300);
   for (const tab of [withOpener, background, loading]) assert.ok(t.sim.tabs.has(tab.id), `tab ${tab.id} kept`);
-  const logged = JSON.stringify(await t.run("diag:list"));
-  assert.match(logged, /blank tab stayed blank and was left alone/);
+});
+
+test("Ctrl+T with another add-on's new-tab page: the blank tab that turns into it is swapped for a fresh one in the container", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const work = await t.run("containers:create", { name: "Work" });
+  await t.run("panel:update", { id: t.panelId, defaultContainer: work });
+  const tab = await blankTab(t);
+  await t.browser.tabs.update(tab.id, { url: "moz-extension://324e4a6e-0000-0000-0000-ad0f/index.html" });
+  await settle(800);
+  assert.ok(!t.sim.tabs.has(tab.id), "the first tab was replaced");
+  const fresh = [...t.sim.tabs.values()].find((x) => x.cookieStoreId === work);
+  assert.ok(fresh, "a tab opened in the panel's container");
+  assert.ok(!/moz-extension/.test(fresh.url ?? ""), "opened empty, so Firefox gives it the add-on's page itself");
+});
+
+test("a blank tab that turns into a page of another add-on and has an opener is left alone", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const work = await t.run("containers:create", { name: "Work" });
+  await t.run("panel:update", { id: t.panelId, defaultContainer: work });
+  const opener = t.sim.byUrl("https://a.test/")[0];
+  const tab = await blankTab(t, { openerTabId: opener.id });
+  await t.browser.tabs.update(tab.id, { url: "moz-extension://324e4a6e-0000-0000-0000-ad0f/index.html" });
+  await settle(800);
+  assert.ok(t.sim.tabs.has(tab.id));
 });

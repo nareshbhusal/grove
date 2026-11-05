@@ -347,7 +347,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       h("span", {}, message),
       h("button", { class: "primary", onclick: async () => { undo.hidden = true; await run("bookmarks:undo"); } }, "Undo")
     );
-    undoTimer = setTimeout(() => { undo.hidden = true; }, 12000);
+    undoTimer = setTimeout(() => { undo.hidden = true; }, 5000);
   }
 
   function menuFor(e, node) {
@@ -536,7 +536,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       folded.delete(scope);
       remember();
       render();
-      await run("bookmarks:save", { ids: tabs, parentId: spot.parentId, windowId: windowId() });
+      await run("bookmarks:save", { ids: tabs, parentId: spot.parentId, ...(spot.at != null ? { index: spot.at } : {}), windowId: windowId() });
       return;
     }
     if (dragging) {

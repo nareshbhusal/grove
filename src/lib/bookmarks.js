@@ -90,27 +90,31 @@ export function planFromTree(all, ids) {
 
 // ---- searching the viewer ----------------------------------------------------
 
-// Every term in the title or address (same rules as searching tabs). -> the ids to show, folders that
-// hold a match included, in order; or null when there is nothing to search for.
+// Every term in the title or address, or in the names of the folders around it (same rules as searching
+// tabs): searching a folder's name shows what is inside it, and "cooking pasta" finds Pasta in Cooking.
+// -> the ids to show, folders that hold a match included, in order; or null when there is nothing to search for.
+// (The built-in folders' names do not count: "bookmarks" would match everything.)
 export function filterTree(items, input) {
   const terms = parseQuery(input);
   if (!terms.length) return null;
   const keep = new Set();
-  const walk = (list) => {
+  const walk = (list, above) => {
     let any = false;
     for (const n of list) {
+      const title = ROOT_NAMES[n.id] ? "" : fold(n.title).s;
       if (n.type === "folder") {
-        const inner = walk(n.children ?? []);
-        const own = terms.every((t) => fold(n.title).s.includes(t));
+        const here = `${above}\n${title}`;
+        const inner = walk(n.children ?? [], here);
+        const own = terms.every((t) => here.includes(t));
         if (inner || own) { keep.add(n.id); any = true; }
       } else {
-        const hay = `${fold(n.title).s}\n${fold(safeDecode(n.url)).s}`;
+        const hay = `${above}\n${title}\n${fold(safeDecode(n.url)).s}`;
         if (terms.every((t) => hay.includes(t))) { keep.add(n.id); any = true; }
       }
     }
     return any;
   };
-  walk(items);
+  walk(items, "");
   return { keep, terms };
 }
 

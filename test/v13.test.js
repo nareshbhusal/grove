@@ -378,7 +378,9 @@ test("viewer search: every word in the title or address; folders with a match st
   ];
   assert.deepEqual([...B.filterTree(items, "pasta food").keep].sort(), ["1", "2"]);
   assert.deepEqual([...B.filterTree(items, "cafe").keep], ["4"], "accents are ignored");
-  assert.deepEqual([...B.filterTree(items, "cooking").keep].sort(), ["1"], "a folder's own name matches");
+  assert.deepEqual([...B.filterTree(items, "cooking").keep].sort(), ["1", "2", "3"], "a folder's name shows what is inside it");
+  assert.deepEqual([...B.filterTree(items, "cooking pasta").keep].sort(), ["1", "2"], "folder names and titles add up");
+  assert.equal(B.filterTree([{ id: "toolbar_____", type: "folder", title: "Bookmarks Toolbar", children: items }], "toolbar").keep.size, 0, "built-in folder names do not match");
   assert.equal(B.filterTree(items, "   "), null);
   assert.equal(B.filterTree(items, "zzz").keep.size, 0);
 });
@@ -388,4 +390,16 @@ test("samePage ignores the fragment and a trailing slash", () => {
   assert.equal(B.samePage("https://a.test/", "https://a.test"), true);
   assert.equal(B.samePage("https://a.test/x", "https://a.test/y"), false);
   assert.equal(B.samePage("", ""), false);
+});
+
+test("a tab dropped between bookmarks lands at that spot, not at the end", async () => {
+  const t = await setup();
+  const dir = await t.run("bookmarks:create", { parentId: "toolbar_____", title: "Read" });
+  await t.run("bookmarks:create", { parentId: dir, title: "one", url: "https://one.test/" });
+  await t.run("bookmarks:create", { parentId: dir, title: "two", url: "https://two.test/" });
+  await t.run("bookmarks:save", { ids: [t.node("a")], parentId: dir, index: 1 });
+  const kids = (await t.marks()).find((x) => x.id === "toolbar_____").children[0].children.map((c) => c.url);
+  assert.equal(kids[0], "https://one.test/");
+  assert.equal(kids[1], U("a").url ?? kids[1]);
+  assert.equal(kids[2], "https://two.test/");
 });

@@ -127,7 +127,7 @@ export default {
     // Reopen a tab's node in another container. Keeps the node, its place in
     // the tree and its panel; only the browser tab is replaced. `lock` marks the
     // node as chosen by you, so rules stop overriding it.
-    async function reopen(nodeId, cookieStoreId, { url, closeOld = true, lock = false } = {}) {
+    async function reopen(nodeId, cookieStoreId, { url, closeOld = true, lock = false, fresh = false } = {}) {
       const node = tree.get(nodeId);
       const oldTabId = tabs.tabIdOf(nodeId);
       if (!node || oldTabId == null) return false;
@@ -135,7 +135,8 @@ export default {
       const props = { windowId: old.windowId, active: old.active, pinned: old.pinned, index: old.index + 1 };
       if (cookieStoreId && cookieStoreId !== DEFAULT_STORE) props.cookieStoreId = cookieStoreId;
       else if (old.cookieStoreId && old.cookieStoreId !== DEFAULT_STORE) props.cookieStoreId = DEFAULT_STORE;
-      const target = openableUrl(url ?? old.url);
+      // `fresh`: open an empty tab and let Firefox give it whatever new-tab page is set up.
+      const target = fresh ? undefined : openableUrl(url ?? old.url);
       if (target) props.url = target;
 
       if (lock) tree.mutate((all) => { if (all[nodeId]) all[nodeId].containerLocked = true; }, "lock");
@@ -219,20 +220,28 @@ export default {
     const NEWTAB = /^about:(newtab|home)$/i;
     const EMPTY = /^(about:blank)?$/i;
 
-    async function swapNewTab(tab, nodeId) {
+    async function swapNewTab(tab, nodeId, { fresh = false } = {}) {
+      const note = (action, reason, extra = {}) =>
+        diagnostics.log("route", { url: tab.url || "(no address)", tabContainer: tab.cookieStoreId, action, reason, ...extra });
       try {
         const node = nodeId ? tree.get(nodeId) : null;
-        if (!node || node.private) return;
+        if (!node) return note("skip", "Grove has no record of this tab, so it cannot be moved");
+        if (node.private) return note("skip", "private-space tabs have no container defaults");
+        const where = panels.find(node.panelId)?.name ?? "?";
         const want = containerForNew("", node.panelId, node.parentId);
-        if (!want || want === tab.cookieStoreId) return;
-        diagnostics.log("route", { url: tab.url, panel: panels.find(node.panelId)?.name ?? "?", tabContainer: tab.cookieStoreId, wanted: want, action: "reroute", reason: "new tab opened where a default container applies" });
+        const quiet = (reason) => note("skip", reason, { panel: where, wanted: want ?? null });
+        if (!want) return quiet(!settings.get("containers", "enforce") ? "enforcement is turned off in settings" : `no default container applies to a new tab in panel “${where}”${node.parentId ? " (or its folders)" : ""}`);
+        if (want === tab.cookieStoreId) return quiet("new tab is already in the right container");
+        note("reroute", "new tab opened where a default container applies", { panel: where, wanted: want });
         try {
-          await reopen(nodeId, want, { closeOld: true });
+          const done = await reopen(nodeId, want, { closeOld: true, fresh });
+          if (!done) note("error", "the new tab could not be swapped: Grove lost track of the browser tab", { panel: where, wanted: want });
         } catch (err) {
           noteFailed(want, err);
         }
       } catch (err) {
         log.debug("new-tab container check failed", err);
+        note("error", `new-tab check failed: ${String(err?.message ?? err)}`);
       }
     }
 
@@ -240,6 +249,8 @@ export default {
     // new-tab page a moment later, and not always with an event that says so. So a blank tab is
     // watched: on every update of it, and by looking again a few times. Once it shows the new-tab
     // page it is swapped; once it shows anything else it is a real page and left alone.
+    const ownPages = api.runtime?.getURL?.("") || null;
+    const isOtherExtensionPage = (url) => /^moz-extension:\/\//i.test(url) && !(ownPages && url.startsWith(ownPages));
     const watching = new Map(); // tabId -> { timers }
     const stopWatching = (tabId) => {
       for (const t of watching.get(tabId) ?? []) clearTimeout(t);
@@ -255,13 +266,18 @@ export default {
       if (!watching.has(tabId)) return;
       const tab = await api.tabs.get(tabId).catch(() => null);
       if (!tab) return stopWatching(tabId);
+      if (!watching.has(tabId)) return; // another look finished while this one was reading the tab
       const url = tab.url ?? fallbackTab?.url ?? "";
       if (NEWTAB.test(url)) {
         stopWatching(tabId);
         await swapNewTab(tab, nodeId);
+      } else if (!EMPTY.test(url) && isOtherExtensionPage(url) && tab.openerTabId == null && tab.active) {
+        // Another add-on replaces the new-tab page: Firefox opens Ctrl+T blank, then loads that
+        // add-on's page. The tab was blank when it was created, so it was not opened to that page.
+        stopWatching(tabId);
+        await swapNewTab(tab, nodeId, { fresh: true });
       } else if (!EMPTY.test(url)) {
         stopWatching(tabId); // a page: not ours to swap
-        diagnostics.log("route", { url, action: "skip", reason: "blank tab became a page, not the new-tab page: left alone" });
       } else if (late) {
         const yours = tab.status !== "loading" && tab.openerTabId == null && tab.active;
         if (yours) {
@@ -269,7 +285,6 @@ export default {
           await swapNewTab(tab, nodeId);
         } else if (last) {
           stopWatching(tabId);
-          diagnostics.log("route", { url: url || "(no address)", action: "skip", reason: `blank tab stayed blank and was left alone (status ${tab.status ?? "?"}, ${tab.openerTabId != null ? "has an opener" : "no opener"}, ${tab.active ? "active" : "in the background"})` });
         }
       }
     }
@@ -279,10 +294,12 @@ export default {
       const url = tab.url ?? "";
       if (NEWTAB.test(url)) return swapNewTab(tab, nodeId);
       if (EMPTY.test(url)) {
-        diagnostics.log("route", { url: url || "(no address)", action: "watch", reason: "tab opened blank: waiting to see whether it becomes the new-tab page" });
         stopWatching(tab.id);
         watching.set(tab.id, [150, 500, 1200, 3000].map((ms) => {
-          const t = setTimeout(() => check(tab.id, nodeId, undefined, { late: ms >= 1200, last: ms === 3000 }), ms);
+          const t = setTimeout(() => {
+            check(tab.id, nodeId, undefined, { late: ms >= 1200, last: ms === 3000 }).catch((err) =>
+              diagnostics.log("route", { url: "", action: "error", reason: `looking at the blank tab failed: ${String(err?.message ?? err)}` }));
+          }, ms);
           t.unref?.();
           return t;
         }));

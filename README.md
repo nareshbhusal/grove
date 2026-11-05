@@ -204,7 +204,7 @@ to the page; use the exceptions for sites with their own shortcuts.
 The bookmark button in the toolbar (or Ctrl+B in the sidebar) swaps the tab list for **Firefox's own bookmarks**: a viewer and manager,
 with no second copy. Everything you do there is done to the real bookmarks, and what changes elsewhere (the Library, Firefox Sync) shows up
 as it happens. Choose a place with the chips (Toolbar, Other; Mobile when it has something; Menu last, and only when it holds something: it is Firefox's built-in
-folder, which no extension can delete); searching looks in all of them.
+folder, which no extension can delete); searching looks in all of them, by the words in a title or address or in the names of the folders around it: searching a folder's name shows what is inside it ("cooking" lists the Cooking folder and everything in it, "cooking pasta" only the pasta things in it).
 
 - **Save**: right-click a tab, a tab with children, a folder or a selection → *Bookmark…*. A picker shows your real bookmark folders and you **choose where it goes**
   (it opens on the folder you used last; *New folder…* makes one inside the chosen one). Tick *Always save here, and stop asking* to make that folder the default:
@@ -229,7 +229,7 @@ which makes *Other Bookmarks › Grove › <panel name>* the first time, or *Boo
 It is an ordinary Firefox folder: Sync, the Library and the address bar see it, and the manager above edits it. The section has a header that folds it away (and remembers
 that), a count, and a button for a new subfolder; it is a separate box, not part of the tab tree, so it never takes part in tab placement, hiding or the vim keys.
 A click opens the page **in this panel**, or switches to a tab of **this panel** that already shows it (a page open in another panel does not count). Drag a tab, or a branch, onto the section
-(or onto its header, also while it is folded) to bookmark it there; drag a link from a page to add it; select several, rename, move and delete work as in the manager. If the folder is
+(or onto its header, also while it is folded) to bookmark it there (the tab stays where it is: it is a copy); drag a link from a page to add it; select several, rename, move and delete work as in the manager. If the folder is
 deleted in Firefox, the panel forgets it. Private panels have none. An export carries the folder as its place (*Other › Grove › Work*), not an id, and an import links the panels it creates
 to it again (making the folder if the file's bookmarks did not hold it).
 
@@ -267,7 +267,9 @@ straight into it, and a new tab you open yourself (Ctrl+T) is swapped for an emp
 say what a new tab shows (with the new-tab page set to "blank page" it stays about:blank), so a
 tab that is still empty after a second, has finished loading, has no opener and is the one you
 are looking at counts as a Ctrl+T tab too. (Typing into its address bar in that first second can
-lose what you typed; the Diagnostics log says what happened to each blank tab.)
+lose what you typed; the Diagnostics log says what happened to each blank tab.) If another add-on
+replaces the new-tab page, a tab that starts blank and then turns into that add-on's page (no opener)
+is swapped for a fresh empty tab in the container, which Firefox gives that page again.
 A tab that already shows a page, or is loading a link, is not moved by it; a rule for its
 address still is. A folder can have a default container too, and its own site rules: right-click the
 folder → "Containers for this folder…" sets both (the default for new tabs, and a list of

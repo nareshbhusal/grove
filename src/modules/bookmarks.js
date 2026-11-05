@@ -128,7 +128,7 @@ export default {
       return count;
     }
 
-    commands.register("bookmarks:save", async ({ ids = [], parentId = null, windowId = null }) => {
+    commands.register("bookmarks:save", async ({ ids = [], parentId = null, index = null, windowId = null }) => {
       const { plan, skipped } = B.planFromTree(tree.all(), ids);
       // Where you chose, else the default folder, else Other Bookmarks. Nothing is ever made for you.
       const into = (await folderOk(parentId))?.id ?? (await folderOk(prefs.defaultId))?.id ?? B.OTHER;
@@ -139,7 +139,8 @@ export default {
       }
       // Several things at once keep together, in a folder named for the moment, easy to rename or move.
       const wrapped = plan.length > 1 ? [{ type: "folder", title: `Saved ${stamp()}`, children: plan }] : plan;
-      const c = await make(into, wrapped);
+      // `index` only means something in the folder you chose, not in the default one it falls back to.
+      const c = await make(into, wrapped, { index: parentId && into === parentId && Number.isInteger(index) ? index : null });
       if (parentId && prefs.lastId !== into) { prefs.lastId = into; savePrefs(); }
       const out = { ...c, skipped: skipped.notes + skipped.pages, parentId: into };
       notify(windowId, summary(out, await nameOf(into)));

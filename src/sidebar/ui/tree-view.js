@@ -388,7 +388,8 @@ export function createTreeView({ root, getState, getWindowId, openMenu, openNote
       draggingId = node.id;
       // Dragging one of several selected rows carries them all, in screen order.
       dragIds = selected.size > 1 && selected.has(node.id) ? withoutDescendants(selectionInOrder()) : [node.id];
-      e.dataTransfer.effectAllowed = "move";
+      // "copyMove": dropping on the bookmarks section copies (bookmarks) the tab; with plain "move" Firefox refuses a copy drop.
+      e.dataTransfer.effectAllowed = "copyMove";
       e.dataTransfer.setData("text/plain", dragIds.join(","));
       // The class is added a tick later so the drag image is not greyed. A quick
       // release can end the drag before that tick, so only add it while the drag
