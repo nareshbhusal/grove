@@ -3,6 +3,7 @@
 
 import { h, run, toast } from "./client.js";
 import { askText, askConfirm } from "./dialog.js";
+import { pickBookmarkFolder } from "./bookmark-picker.js";
 import { icon } from "./icons.js";
 import { dropAllowed } from "../../lib/tree.js";
 import { isExternal, readLinks } from "./external-drop.js";
@@ -55,6 +56,21 @@ export function createPanelBar({ root, getState, getWindowId, getDraggingIds, sh
       } },
       { swatches: PALETTE, current: p.color, onPick: (color) => run("panel:update", { id: p.id, color }) },
     ];
+    // The panel's own bookmarks: a real bookmark folder, shown above its tabs.
+    if (!p.private) {
+      items.push({ separator: true });
+      if (p.bookmarksFolder) {
+        items.push({ label: p.showBookmarks ? "Hide bookmarks" : "Show bookmarks", onSelect: () => run("panel:update", { id: p.id, showBookmarks: !p.showBookmarks }) });
+      } else {
+        items.push({ label: "Show bookmarks", onSelect: () => run("panel:setBookmarksFolder", { id: p.id, create: true }) });
+      }
+      items.push({ label: "Bookmarks folder…", onSelect: async () => {
+        const pick = await pickBookmarkFolder({ title: `Bookmarks folder for “${p.name}”`, initial: p.bookmarksFolder ?? "unfiled_____", confirm: "Use this folder", askDefault: false });
+        if (pick) run("panel:setBookmarksFolder", { id: p.id, folderId: pick.id });
+      } });
+      if (p.bookmarksFolder) items.push({ label: "Stop using a bookmarks folder", onSelect: () => run("panel:setBookmarksFolder", { id: p.id, folderId: null }) });
+      items.push({ separator: true });
+    }
     if (index > 0) items.push({ label: "Move left", onSelect: () => move(-1) });
     if (index < state.panels.length - 1) items.push({ label: "Move right", onSelect: () => move(1) });
     if (state.panels.length > 1) {

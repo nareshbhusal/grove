@@ -65,3 +65,5 @@ details.picker[open] > summary { border-color: var(--accent); }
 .picker-list label { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
 .picker-list label:hover { background: var(--bg-2); }
 p.hint.warn { color: var(--danger); min-height: 1.2em; margin-top: 4px; }
+.grid.pbm { grid-template-columns: 140px 1fr 90px; align-items: center; }
+.grid.pbm .check { display: flex; align-items: center; gap: 6px; }

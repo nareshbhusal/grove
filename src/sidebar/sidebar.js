@@ -77,6 +77,15 @@ const marks = createBookmarksView({
   showMenu: (e, items) => menu.show(e, items),
   onToggle: (on) => $("toolbar").querySelector(".marks-toggle")?.setAttribute("aria-pressed", String(on)),
 });
+// The panel's own bookmarks: one real bookmark folder shown above the tabs, when the panel is set to.
+const pmarks = createBookmarksView({
+  root: $("pmarks"),
+  embedded: true,
+  getState,
+  getWindowId,
+  getDraggingIds: () => tree.getDraggingIds(),
+  showMenu: (e, items) => menu.show(e, items),
+});
 // Choosing a panel is going back to your tabs.
 $("panelbar").addEventListener("click", () => marks.hide());
 
@@ -168,6 +177,9 @@ function renderAll() {
   tree.render();
   hover.refresh();
   marks.redraw();
+  const panel = state.panels.find((p) => p.id === v.panelId);
+  pmarks.setFolder(panel && !panel.private && panel.showBookmarks && panel.bookmarksFolder ? panel.bookmarksFolder : null);
+  pmarks.redraw();
   folderContainers.refresh();
 }
 
@@ -197,7 +209,7 @@ async function main() {
       marks.hide();
       search.show();
     },
-    onBookmarks: () => marks.changed(),
+    onBookmarks: () => { marks.changed(); pmarks.changed(); },
   });
   // The same keys as on a page (gt, t, H, ...), while the sidebar has the focus.
   globalThis.groveVimKeys?.install(window, {

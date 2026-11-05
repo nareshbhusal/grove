@@ -1,6 +1,7 @@
 // "Save to which folder?": the real bookmark folders as a small tree, one of them chosen.
 //
-//   const r = await pickBookmarkFolder({ title, initial });   -> { id, makeDefault } | null
+//   const r = await pickBookmarkFolder({ title, initial, confirm?, askDefault? });   -> { id, makeDefault } | null
+//   (askDefault: false leaves out the "always save here" checkbox, for choosing a folder for another purpose)
 //
 // Opens on the folder you used last (or your default), unfolded so it is in view. "New folder…" makes one
 // inside the chosen folder. The checkbox sets the chosen folder as the default and stops the question
@@ -14,7 +15,7 @@ const NAMES = { menu________: "Menu", toolbar_____: "Toolbar", unfiled_____: "Ot
 // Toolbar and Other first; the Menu folder, which is rarely used, last, and only when it holds something.
 const ORDER = ["toolbar_____", "unfiled_____", "mobile______", "menu________"];
 
-export async function pickBookmarkFolder({ title = "Save to…", initial = "unfiled_____" } = {}) {
+export async function pickBookmarkFolder({ title = "Save to…", initial = "unfiled_____", confirm = "Save", askDefault = true } = {}) {
   let roots;
   try {
     ({ roots } = await cmd("bookmarks:tree"));
@@ -88,12 +89,12 @@ export async function pickBookmarkFolder({ title = "Save to…", initial = "unfi
       h("div", { class: "dialog picker" },
         h("div", { class: "dialog-title" }, title),
         tree,
-        h("label", { class: "picker-always", for: "picker-default" }, always, h("span", {}, "Always save here, and stop asking")),
+        askDefault ? h("label", { class: "picker-always", for: "picker-default" }, always, h("span", {}, "Always save here, and stop asking")) : null,
         h("div", { class: "dialog-actions" },
           h("button", { class: "picker-new", onclick: newFolder }, "New folder…"),
           h("span", { class: "spacer" }),
           h("button", { onclick: () => done(null) }, "Cancel"),
-          h("button", { class: "primary", onclick: save }, "Save"))));
+          h("button", { class: "primary", onclick: save }, confirm))));
     wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) done(null); });
     wrap.addEventListener("keydown", (e) => {
       if (e.target.closest?.("input[type=text]")) return;

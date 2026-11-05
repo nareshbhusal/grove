@@ -118,10 +118,17 @@ export default {
         return { filename: `grove-${stamp}.html`, mime: "text/html", text, digest: text };
       }
 
+      // A panel's bookmarks folder travels as its place (the built-in folder and the titles down to it): ids belong to one profile.
+      const outPanels = [];
+      for (const { panel, forest } of data) {
+        const { bookmarksFolder, ...rest } = panel;
+        const place = bookmarksFolder ? await bookmarks.pathOf(bookmarksFolder).catch(() => null) : null;
+        outPanels.push({ ...rest, ...(place ? { bookmarksFolder: place } : {}), tree: forest });
+      }
       const payload = {
         grove: FORMAT_VERSION,
         exportedAt: new Date().toISOString(),
-        panels: data.map(({ panel, forest }) => ({ ...panel, tree: forest })),
+        panels: outPanels,
       };
       // Containers any panel, rule or tab refers to, so a fresh profile can recreate them.
       const used = new Set();
@@ -234,6 +241,8 @@ export default {
           color: /^#[0-9a-f]{3,8}$/i.test(p.color ?? "") ? p.color : "#8a8a8a",
           icon: typeof p.icon === "string" ? p.icon : null,
           defaultContainer: p.defaultContainer ?? null,
+          bookmarksFolder: null, // linked after the bookmarks are back (below)
+          showBookmarks: false,
         };
         created.push(panel);
         targets[i] = panel.id;
@@ -368,6 +377,15 @@ export default {
       // Bookmarks are added where they are missing, never replaced or removed.
       let marks = null;
       if ((mode === "replace" || !panelId) && payload.bookmarks) marks = await bookmarks.restore(payload.bookmarks).catch(() => null);
+
+      // A panel this import made gets its bookmarks folder back (made if the file's bookmarks did not hold it).
+      for (const [i, p] of incoming.entries()) {
+        const made = created.find((c) => c.id === targets[i]);
+        const place = p.bookmarksFolder;
+        if (!made || !place || typeof place !== "object") continue;
+        const folderId = await bookmarks.ensureFolder(place.root, place.path).catch(() => null);
+        if (folderId) await commands.run("panel:update", { id: made.id, bookmarksFolder: folderId, showBookmarks: p.showBookmarks === true });
+      }
 
       await store.flush();
       return { bookmarks: marks, panels: incoming.length, panelsCreated: created.length, tabs: tabCount, notes: noteCount, containersCreated, rulesSkipped, unreadable };

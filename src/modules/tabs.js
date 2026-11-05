@@ -658,7 +658,11 @@ export default {
     // tab per link at the given place, in order. Only the first becomes the active
     // tab, and only when the place is what you are looking at: dropping into
     // another panel must not pull you away from where you are.
-    commands.register("tab:openUrls", async ({ urls = [], windowId = null, parentId = null, index = null, panelId = null }) => {
+    //
+    // `into` is the node of a tab the links were dropped ON. If that tab is an empty new
+    // tab, the first link opens in it (a new tab page has nothing to be a parent of);
+    // any other link, or any other kind of tab, goes in as usual.
+    commands.register("tab:openUrls", async ({ urls = [], windowId = null, parentId = null, index = null, panelId = null, into = null }) => {
       const wid = windowId ?? (await api.windows.getLastFocused()).id;
       const clean = urls.map((u) => (typeof u === "string" ? { url: u } : u)).filter((u) => /^(https?|ftp|file):\/\//i.test(u?.url ?? ""));
       const parent = parentId ? tree.get(parentId) : null;
@@ -670,7 +674,18 @@ export default {
       let at = index;
       let opened = 0;
       let error = null;
-      for (const { url } of clean) {
+      const blank = into ? tree.get(into) : null;
+      const blankTabId = blank?.type === "tab" && /^(about:(newtab|blank|home)|)$/i.test(blank.url ?? "") ? tabByNode.get(blank.id) ?? null : null;
+      for (const [i, { url }] of clean.entries()) {
+        if (i === 0 && blankTabId != null) {
+          try {
+            await api.tabs.update(blankTabId, { url, active: visible });
+            opened++;
+            continue;
+          } catch (err) {
+            log.warn("could not load the link into the empty tab, opening it as a new tab", err);
+          }
+        }
         try {
           await createTabIn({ windowId: wid, url, active: visible && opened === 0 }, { placement: { parentId, index: at, panelId: targetPanel } }, targetPanel);
           opened++;

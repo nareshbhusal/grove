@@ -17,7 +17,8 @@
 //                      (no parentId: the default folder, else Other Bookmarks)
 //   bookmarks:prefs    {}                                  -> { ask, defaultId, defaultTitle, lastId }
 //   bookmarks:setDefault { id, stopAsking? }               id null clears it
-//   bookmarks:open     { id, windowId, mode? }             mode "tab" (default) | "child" | "background"
+//   bookmarks:open     { id, windowId, mode?, here? }      mode "tab" (default) | "child" | "background"; here: only a tab of
+//                      this panel counts as "already open"
 //   bookmarks:openFolder { id, windowId, loaded? }         -> the Grove folder it made
 //   bookmarks:create   { parentId, title, url?, index? }   -> id
 //   bookmarks:update   { id, title?, url? }
@@ -25,6 +26,8 @@
 //   bookmarks:moveMany { ids, parentId, index? }           -> { moved, skipped } (in the order given, together)
 //   bookmarks:remove   { id } or { ids }                   -> true; bookmarks:undo brings the last delete back, all of it
 //   bookmarks:undo     {}                                  -> true | false
+//   panel:setBookmarksFolder { id, folderId? , create? }   a panel's own bookmarks: any real folder (folderId),
+//                      or a new one, Other Bookmarks / Grove / <panel name> (create); folderId null unlinks. Linking shows it.
 // Events: bookmarks:changed
 // Used by io.js: snapshot(), restore(snapshot)
 
@@ -34,10 +37,10 @@ import * as B from "../lib/bookmarks.js";
 
 export default {
   name: "bookmarks",
-  deps: ["tree", "windows", "tabs", "folders", "settings", "bridge"],
+  deps: ["tree", "windows", "tabs", "folders", "settings", "bridge", "panels"],
 
   async setup({ api, bus, commands, hooks, log, modules }) {
-    const { tree, windows, tabs, settings, bridge } = modules;
+    const { tree, windows, tabs, settings, bridge, panels } = modules;
     const native = () => {
       if (!api.bookmarks) throw new Error("Firefox did not give Grove access to bookmarks (the extension needs the bookmarks permission)");
       return api.bookmarks;
@@ -250,12 +253,13 @@ export default {
 
     const view = (windowId) => windows.getView(windowId);
 
-    commands.register("bookmarks:open", async ({ id, windowId, mode = "tab" }) => {
+    commands.register("bookmarks:open", async ({ id, windowId, mode = "tab", here = false }) => {
       const [bm] = await native().get(id);
       if (!bm?.url) return false;
       if (mode === "tab" && get("reuse")) {
         const mine = T.visibleTo(tree.all(), windows.isPrivate(windowId));
-        const live = Object.values(mine).find((n) => n.type === "tab" && tabs.tabIdOf(n.id) != null && B.samePage(n.url, bm.url));
+        const panelId = view(windowId).panelId;
+        const live = Object.values(mine).find((n) => n.type === "tab" && tabs.tabIdOf(n.id) != null && (!here || n.panelId === panelId) && B.samePage(n.url, bm.url));
         if (live) return commands.run("tab:activate", { id: live.id, windowId });
       }
       const props = { windowId, url: bm.url, panelId: view(windowId).panelId, active: mode !== "background" };
@@ -296,6 +300,73 @@ export default {
       return rootId;
     }, { title: "Open bookmark folder" });
 
+    // ---- a panel's own bookmarks ------------------------------------------
+    //
+    // A panel can be linked to one real bookmark folder (panel.bookmarksFolder) and show its contents above its
+    // tabs (panel.showBookmarks). The folder stays an ordinary Firefox folder: sync, the library and the address
+    // bar see it too. Only the link lives in Grove, so it is checked against the real folders.
+
+    // The folder named `title` directly under `parentId`, made if it is not there.
+    async function childFolder(parentId, title) {
+      const kids = await native().getChildren(parentId);
+      const hit = kids.find((k) => k.type === "folder" && k.title === title);
+      return hit?.id ?? (await native().create({ parentId, title, type: "folder" })).id;
+    }
+
+    // A folder by its place (a built-in folder and the titles below it), made if missing: how a panel's folder
+    // travels in an export, since ids belong to one profile.
+    async function ensureFolder(root, path) {
+      if (!B.ROOT_NAMES[root] || !Array.isArray(path) || path.length > 12) return null;
+      let at = root;
+      for (const title of path) {
+        if (typeof title !== "string") return null;
+        at = await childFolder(at, title);
+      }
+      return at;
+    }
+
+    // The place of a folder: { root, path } (the built-in folder it is under and the titles down to it), or null.
+    async function pathOf(id) {
+      const path = [];
+      let at = await folderOk(id);
+      if (!at) return null;
+      for (let guard = 0; at && guard < 40; guard++) {
+        if (B.ROOT_NAMES[at.id]) return { root: at.id, path: path.reverse() };
+        path.push(at.title ?? "");
+        at = (await native().get(at.parentId).catch(() => [null]))[0];
+      }
+      return null;
+    }
+
+    async function setPanelLink(panelId, patch) {
+      if (!panels.find(panelId)) return false;
+      await commands.run("panel:update", { id: panelId, ...patch });
+      return true;
+    }
+
+    commands.register("panel:setBookmarksFolder", async ({ id, folderId = null, create = false }) => {
+      const panel = panels.find(id);
+      if (!panel || panel.private) throw new Error("Private panels have no bookmarks folder");
+      if (create) {
+        const grove = await childFolder(B.OTHER, "Grove");
+        folderId = await childFolder(grove, panel.name || "Panel");
+      } else if (folderId != null && !(await folderOk(folderId))) {
+        throw new Error("That bookmarks folder no longer exists");
+      }
+      await setPanelLink(id, { bookmarksFolder: folderId ?? null, showBookmarks: folderId != null });
+      return folderId ?? null;
+    }, { title: "Panel bookmarks folder" });
+
+    // A link to a folder that is gone (deleted in Firefox, or an old backup) is dropped, so the panel does not show
+    // an empty box that can never be filled.
+    async function checkLinks() {
+      if (!api.bookmarks) return;
+      for (const p of panels.list()) {
+        if (p.bookmarksFolder && !(await folderOk(p.bookmarksFolder))) await setPanelLink(p.id, { bookmarksFolder: null, showBookmarks: false });
+      }
+    }
+    checkLinks().catch((err) => log.warn("panel bookmark folders not checked", err));
+
     // ---- backups ---------------------------------------------------------
 
     // What goes into an export: { scope, roots: [{ root, title, children }] }, or null.
@@ -328,7 +399,10 @@ export default {
 
     // ---- change notices --------------------------------------------------
 
-    const changed = debounce(() => bus.emit("bookmarks:changed", {}), 100);
+    const changed = debounce(() => {
+      bus.emit("bookmarks:changed", {});
+      checkLinks().catch(() => {});
+    }, 100);
     const listen = [];
     for (const ev of ["onCreated", "onRemoved", "onChanged", "onMoved"]) {
       const target = api.bookmarks?.[ev];
@@ -372,7 +446,7 @@ export default {
     }, { priority: 60 });
 
     return {
-      exports: { snapshot, restore, make, roots },
+      exports: { snapshot, restore, make, roots, pathOf, ensureFolder },
       teardown() {
         changed.cancel();
         for (const t of listen) t.removeListener?.(changed);

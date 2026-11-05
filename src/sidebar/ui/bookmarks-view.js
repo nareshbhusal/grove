@@ -10,6 +10,10 @@
 //   drag           reorder, move into a folder (the whole selection together); a link dragged in from a page is added where you drop it
 //   Up/Down/Left/Right move around (Shift extends the selection), Space selects, Ctrl+A all, Enter opens, F2 renames,
 //   Delete deletes (and offers to undo), / searches, Esc clears the selection, then leaves
+//
+// The same view also serves as a panel's own bookmarks (`embedded`): one real folder, shown above the tabs, with a header
+// that folds it away. It has no search or folder tabs; a click opens the page in THIS panel (switching to a tab of this
+// panel that already shows it), and a tab dragged onto it is bookmarked there.
 
 import { h, run, cmd, toast } from "./client.js";
 import { icon, twistyIcon } from "./icons.js";
@@ -28,20 +32,22 @@ const SCOPES = [
   ["menu________", "Menu"],
 ];
 const OPTIONAL = new Set(["mobile______", "menu________"]);
-const KEY = "grove:bookmarks-view";
 
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY) ?? "{}") ?? {}; } catch { return {}; } };
 const write = (v) => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* private window or blocked storage: it just is not remembered */ } };
 
-export function createBookmarksView({ root, getState, getWindowId, showMenu, onToggle = () => {} }) {
+export function createBookmarksView({ root, getState, getWindowId, showMenu, onToggle = () => {}, embedded = false, getDraggingIds = () => [] }) {
+  const KEY = embedded ? "grove:panel-bookmarks" : "grove:bookmarks-view";
   let open = false;
   let data = null; // { roots }
   let loading = false;
   const saved = read();
-  let scope = SCOPES.some(([id]) => id === saved.scope) ? saved.scope : "toolbar_____";
+  let scope = embedded ? null : SCOPES.some(([id]) => id === saved.scope) ? saved.scope : "toolbar_____";
   const expanded = new Set(saved.expanded ?? []);
+  const folded = new Set(saved.folded ?? []); // embedded: the folders whose section is folded away
   let query = "";
   let cursor = null;
+  let shownCursor = null; // the cursor as of the last redraw
   let dragging = null;
   let dragIds = []; // everything the current drag carries (the selection, or just the row)
   let undoTimer = null;
@@ -50,7 +56,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   const selected = new Set();
   let anchor = null;
 
-  const remember = () => write({ scope, expanded: [...expanded].slice(-400) });
+  const remember = () => write(embedded ? { expanded: [...expanded].slice(-400), folded: [...folded].slice(-100) } : { scope, expanded: [...expanded].slice(-400) });
 
   // ---- parts ------------------------------------------------------------
 
@@ -65,12 +71,27 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   const undo = h("div", { class: "marks-undo", role: "status", hidden: true });
   const hint = h("div", { class: "marks-hint" }, "Ctrl-click: select · Shift-click: range · middle-click: behind · right-click: more");
   const selbar = h("div", { class: "marks-sel", role: "status", hidden: true });
-  root.replaceChildren(head, h("div", { class: "marks-controls" }, box, scopes), list, selbar, hint, undo);
+  // Embedded: a header that folds the list away, and a button for a new folder, instead of the manager's controls.
+  const fold = h("button", { class: "pm-fold", "aria-expanded": "true", onclick: () => setFolded(!folded.has(scope)) });
+  const pmCount = h("span", { class: "count" });
+  const pmTitle = h("span", { class: "pm-title" }, "Bookmarks");
+  fold.append(h("span", { class: "twisty has open" }, twistyIcon()), icon("bookmark", { size: 14 }), pmTitle, pmCount);
+  const pmNew = h("button", { class: "tool make", title: "New folder here", "aria-label": "New folder here", onclick: () => makeFolder(null) }, icon("folderPlus", { size: 16 }));
+  const pmHead = h("div", { class: "pm-head" }, fold, pmNew);
+  if (embedded) root.replaceChildren(pmHead, list, selbar, undo);
+  else root.replaceChildren(head, h("div", { class: "marks-controls" }, box, scopes), list, selbar, hint, undo);
 
   // ---- what is shown ----------------------------------------------------
 
   const rootsById = () => new Map((data?.roots ?? []).map((r) => [r.id, r]));
-  const scopeRoot = () => rootsById().get(scope) ?? null;
+  const findFolder = (list, id) => {
+    for (const n of list ?? []) {
+      if (n.id === id) return n;
+      if (n.type === "folder") { const hit = findFolder(n.children, id); if (hit) return hit; }
+    }
+    return null;
+  };
+  const scopeRoot = () => (embedded ? findFolder(data?.roots, scope) : rootsById().get(scope) ?? null);
 
   // Where things go when you drop on the empty part of the list, or press "new folder".
   const scopeParentId = () => scope;
@@ -108,7 +129,25 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     return out;
   }
 
+  function setFolded(want) {
+    if (want) folded.add(scope); else folded.delete(scope);
+    remember();
+    render();
+  }
+
   function render() {
+    if (embedded) {
+      const isFolded = folded.has(scope);
+      fold.setAttribute("aria-expanded", String(!isFolded));
+      fold.querySelector(".twisty").classList.toggle("open", !isFolded);
+      list.hidden = isFolded;
+      pmNew.hidden = isFolded;
+      if (isFolded) { selected.clear(); selbar.hidden = true; }
+      const here = scopeRoot();
+      pmCount.textContent = here ? String(countLeaves(here.children)) : "";
+      const owner = getState()?.panels?.find((p) => p.bookmarksFolder === scope);
+      pmTitle.textContent = owner ? `${owner.name} bookmarks` : "Bookmarks";
+    }
     scopes.replaceChildren(
       ...SCOPES.filter(([id]) => !OPTIONAL.has(id) || (rootsById().get(id)?.children?.length ?? 0) || scope === id).map(([id, label]) =>
         h("button", { class: "chip", role: "tab", "aria-selected": String(!query && scope === id), onclick: () => pick(id) }, label))
@@ -117,7 +156,13 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const { items, filter } = visibleItems();
     index = new Map();
     const rows = flatten(items, filter, 0, scopeRoot() ?? null, []);
+    const kept = list.scrollTop; // a redraw (a bookmark was added, something loaded) must not move the list
+    const wanted = cursor;
     if (!rows.some((r) => r.node.id === cursor)) cursor = rows[0]?.node.id ?? null;
+    // Only a cursor that was MOVED (arrow keys, a click) is brought into view. One that was merely reset
+    // to the first row because its old row is gone is not a reason to scroll anywhere.
+    const reveal = cursor === wanted && cursor !== shownCursor;
+    shownCursor = cursor;
     order = rows.map((r) => r.node.id);
     for (const id of [...selected]) if (!index.has(id)) selected.delete(id); // gone, or no longer on screen
     if (anchor && !index.has(anchor)) anchor = null;
@@ -130,14 +175,20 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       list.replaceChildren(h("div", { class: "empty" }, loading ? "Loading bookmarks…" : "Bookmarks are not available."));
       return;
     }
+    if (embedded && !scopeRoot()) {
+      list.replaceChildren(h("div", { class: "empty" }, "This bookmarks folder is gone."));
+      return;
+    }
     if (!rows.length) {
       list.replaceChildren(h("div", { class: "empty" },
+        embedded ? "Empty. Drag a tab here, or right-click a tab and choose Bookmark." :
         filter ? "Nothing matches." :
         "Empty. Right-click a tab, a branch or a folder in the tab list and choose Bookmark (a branch keeps its shape as a folder), drag a link here, or press the folder button."));
       return;
     }
     list.replaceChildren(...rows.map(({ node, depth }) => row(node, depth, icons, live, terms)));
-    list.querySelector(".cursor")?.scrollIntoView({ block: "nearest" });
+    list.scrollTop = kept;
+    if (reveal) list.querySelector(".cursor")?.scrollIntoView({ block: "nearest" });
     paintSelection();
   }
 
@@ -240,6 +291,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     scope = id;
     remember();
     render();
+    list.scrollTop = 0; // another folder of bookmarks: from its top
   }
 
   // ---- doing things ----------------------------------------------------
@@ -249,7 +301,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
 
   function openNode(node, mode = "tab") {
     if (node.type === "folder") return toggle(node.id);
-    return run("bookmarks:open", { id: node.id, windowId: windowId(), mode });
+    return run("bookmarks:open", { id: node.id, windowId: windowId(), mode, ...(embedded ? { here: true } : {}) });
   }
 
   function toggle(id, force) {
@@ -439,22 +491,54 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     r.classList.add("dragging");
   });
   list.addEventListener("dragend", () => { dragging = null; clearDrop(); list.querySelector(".dragging")?.classList.remove("dragging"); });
+  // Tabs dragged out of the tab list (embedded only): dropping them here bookmarks them.
+  const fromTabs = () => (embedded && !dragging ? getDraggingIds() : []);
+
   list.addEventListener("dragover", (e) => {
-    const external = !dragging && isExternal(e.dataTransfer);
-    if (!dragging && !external) return;
+    const tabs = fromTabs();
+    const external = !dragging && !tabs.length && isExternal(e.dataTransfer);
+    if (!dragging && !external && !tabs.length) return;
     const r = rowOf(e);
     if (dragging && r && dragIds.some((id) => r.dataset.id === id || within(r.dataset.id, id))) return clearDrop();
     e.preventDefault();
-    e.dataTransfer.dropEffect = external ? "copy" : "move";
+    e.dataTransfer.dropEffect = external || tabs.length ? "copy" : "move";
     const spot = spotFor(e, r);
     clearDrop();
     spot.target?.classList.add(spot.mark);
   });
   list.addEventListener("dragleave", (e) => { if (!list.contains(e.relatedTarget)) clearDrop(); });
-  list.addEventListener("drop", async (e) => {
+  // Dropped on the header (also while the list is folded): into the top of this folder.
+  pmHead.addEventListener("dragover", (e) => {
+    if (!embedded || (!fromTabs().length && !(!dragging && isExternal(e.dataTransfer)))) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    pmHead.classList.add("drop-target");
+  });
+  pmHead.addEventListener("dragleave", () => pmHead.classList.remove("drop-target"));
+  pmHead.addEventListener("drop", (e) => {
+    pmHead.classList.remove("drop-target");
+    e.preventDefault();
+    finishDrop(e, { parentId: scopeParentId(), at: null });
+  });
+
+  list.addEventListener("drop", (e) => {
     const r = rowOf(e);
     const spot = spotFor(e, r);
     clearDrop();
+    finishDrop(e, spot, r);
+  });
+
+  async function finishDrop(e, spot, r = null) {
+    const tabs = fromTabs();
+    if (tabs.length) {
+      e.preventDefault();
+      if (spot.parentId && spot.mark === "drop-inside") expanded.add(spot.parentId);
+      folded.delete(scope);
+      remember();
+      render();
+      await run("bookmarks:save", { ids: tabs, parentId: spot.parentId, windowId: windowId() });
+      return;
+    }
     if (dragging) {
       e.preventDefault();
       const ids = dragIds;
@@ -474,7 +558,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       await run("bookmarks:create", { parentId: spot.parentId, title: l.title || hostOf(l.url) || l.url, url: l.url, ...(at != null ? { index: at++ } : {}) });
     }
     if (links.length) toast(`${links.length} bookmark${links.length === 1 ? "" : "s"} added`);
-  });
+  }
 
   // ---- keyboard ---------------------------------------------------------
 
@@ -529,7 +613,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       case "Escape":
         if (document.getElementById("menu")?.hidden === false) return;
         e.preventDefault();
-        if (!clearSelection()) api.hide(); // the first Esc puts the selection away, the next leaves
+        if (!clearSelection()) { if (embedded) document.getElementById("tree")?.focus(); else api.hide(); } // the first Esc puts the selection away, the next leaves
         return;
       case "/": e.preventDefault(); search.focus(); search.select(); return;
     }
@@ -559,6 +643,18 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
       onToggle(false);
     },
     toggle() { open ? api.hide() : api.show(); },
+    // Embedded: show this bookmark folder (null hides the section). Changing to another folder starts from the top.
+    setFolder(id) {
+      if (id === scope && open === !!id) return;
+      const changedFolder = id !== scope;
+      scope = id;
+      open = !!id;
+      root.hidden = !id;
+      if (changedFolder) { selected.clear(); anchor = null; cursor = null; }
+      if (!id) return;
+      render();
+      if (changedFolder) { list.scrollTop = 0; load(); }
+    },
     focusSearch() { api.show(); search.focus(); search.select(); },
     // The bookmarks changed somewhere: fetch again, if anyone is looking.
     changed() { if (open) load(); },

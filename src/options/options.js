@@ -101,6 +101,61 @@ function renderFolders() {
   ];
 }
 
+// Every bookmark folder with where it sits ("Other › Grove › Work"), for choosing a panel's folder.
+const ROOT_NAMES = { toolbar_____: "Toolbar", unfiled_____: "Other", mobile______: "Mobile", menu________: "Menu" };
+function flatFolders(roots) {
+  const out = [];
+  const walk = (n, path) => {
+    for (const c of n.children ?? []) {
+      if (c.type !== "folder") continue;
+      const here = [...path, c.title || "Untitled folder"];
+      out.push({ id: c.id, label: here.join(" › ") });
+      walk(c, here);
+    }
+  };
+  for (const r of roots) walk(r, [ROOT_NAMES[r.id] ?? r.title]);
+  return out;
+}
+
+// A panel can show one real bookmarks folder above its tabs.
+function renderPanelBookmarks() {
+  const holder = h("div", { class: "grid pbm" }, h("div", { class: "hint" }, "Loading bookmark folders…"));
+  (async () => {
+    let folders;
+    try {
+      folders = flatFolders((await cmd("bookmarks:tree")).roots);
+    } catch (err) {
+      holder.replaceChildren(h("div", { class: "hint" }, err.message));
+      return;
+    }
+    const rows = [h("div", { class: "head" }, "Panel"), h("div", { class: "head" }, "Bookmarks folder"), h("div", { class: "head" }, "Above the tabs")];
+    for (const p of state.panels) {
+      const known = folders.some((f) => f.id === p.bookmarksFolder);
+      const sel = h("select", { onchange: (e) => {
+        const v = e.target.value;
+        report(cmd("panel:setBookmarksFolder", v === "+new" ? { id: p.id, create: true } : { id: p.id, folderId: v || null }));
+      } },
+      h("option", { value: "" }, "None"),
+      h("option", { value: "+new" }, `New folder “Grove › ${p.name}”`),
+      ...folders.map((f) => h("option", { value: f.id }, f.label)));
+      sel.value = known ? p.bookmarksFolder : "";
+      rows.push(
+        h("div", { class: "folder-name" }, p.name),
+        sel,
+        h("label", { class: "check" },
+          h("input", { type: "checkbox", checked: !!p.showBookmarks && known, disabled: !known, onchange: (e) => report(cmd("panel:update", { id: p.id, showBookmarks: e.target.checked })) }),
+          "Show")
+      );
+    }
+    holder.replaceChildren(...rows);
+  })();
+  return [
+    h("h3", { style: { margin: "18px 0 6px", fontSize: "13px" } }, "Panel bookmarks"),
+    h("p", { class: "hint" }, "A panel can show one bookmarks folder above its tabs. It is an ordinary Firefox folder, so Sync and the library see it too. You can also set this from the panel's right-click menu."),
+    holder,
+  ];
+}
+
 function renderPanels() {
   const body = $("panels-body");
   const rows = [h("div", { class: "head" }), h("div", { class: "head" }, "Name"), h("div", { class: "head" }, "New tabs open in"), h("div", { class: "head" })];
@@ -118,7 +173,8 @@ function renderPanels() {
     h("p", { class: "hint" }, "Panels are separate contexts. Switching panels hides the tabs of the others. A panel's container applies to tabs you open in it."),
     h("div", { class: "grid panels" }, ...rows),
     h("div", { class: "row-actions" }, h("button", { onclick: () => report(cmd("panel:create", { name: "New panel" })) }, "Add panel")),
-    ...renderFolders()
+    ...renderFolders(),
+    ...renderPanelBookmarks()
   );
 }
 

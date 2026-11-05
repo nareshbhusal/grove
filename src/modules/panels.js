@@ -98,14 +98,15 @@ export default {
 
     // A panel made from a private window is private: in memory, and only that kind of window sees it.
     commands.register("panel:create", ({ name = "New panel", color = "#8a8a8a", icon = null, windowId = null } = {}) => {
-      const panel = { id: uid("p"), name, color, icon, defaultContainer: null };
+      const panel = { id: uid("p"), name, color, icon, defaultContainer: null, bookmarksFolder: null, showBookmarks: false };
       if (windowId != null && windows.isPrivate(windowId)) panel.private = true;
       save([...list(), panel], "create");
       return panel.id;
     });
 
     commands.register("panel:update", ({ id, ...fields }) => {
-      const allowed = ["name", "color", "icon", "defaultContainer"];
+      // bookmarksFolder is a real folder of this profile: panel:setBookmarksFolder (bookmarks module) checks it, and drops it if the folder goes.
+      const allowed = ["name", "color", "icon", "defaultContainer", "showBookmarks", "bookmarksFolder"];
       const next = list().map((p) => {
         if (p.id !== id) return p;
         const patch = {};

@@ -417,7 +417,7 @@ export function createTreeView({ root, getState, getWindowId, openMenu, openNote
       if (!draggingId) {
         const hit = spotFor(e, row, node.id);
         clearDropMarks();
-        dropExternal(e.dataTransfer, hit?.spot ?? null);
+        dropExternal(e.dataTransfer, hit?.spot ?? null, hit?.zone === "inside" && node.type === "tab" ? node.id : null);
         return;
       }
       const hit = !dragIds.includes(node.id) ? spotFor(e, row, node.id) : null;
@@ -429,7 +429,8 @@ export function createTreeView({ root, getState, getWindowId, openMenu, openNote
 
   // Open what was dropped from outside at `spot`: links, bookmarks and downloads as
   // tabs, or text with no link in it as a search (in the background).
-  async function dropExternal(dt, spot) {
+  // `onto` is a tab the drop landed in the middle of; an empty new tab takes the first link itself.
+  async function dropExternal(dt, spot, onto = null) {
     const { links, files, text } = readLinks(dt);
     if (!links.length && !text) {
       toast(files ? "Firefox does not tell extensions where a dragged file is. Drag it from the Downloads panel instead, or open it from the address bar." : "Nothing to open in what you dropped.");
@@ -437,7 +438,7 @@ export function createTreeView({ root, getState, getWindowId, openMenu, openNote
     }
     if (!spot) return toast("A tab cannot go there.");
     const res = links.length
-      ? await run("tab:openUrls", { urls: links, windowId: getWindowId(), ...spot })
+      ? await run("tab:openUrls", { urls: links, windowId: getWindowId(), ...spot, ...(onto ? { into: onto } : {}) })
       : await run("tab:search", { text, windowId: getWindowId(), ...spot });
     if (res?.error) toast(res.error);
   }

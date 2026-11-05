@@ -244,3 +244,75 @@ test("the folder menu offers the container dialog", async () => {
   assert.equal(entry.args.id, f);
   void c;
 });
+
+// ---- dropping links ----
+
+test("a link dropped on an empty new tab opens in that tab; on any other tab, as its child", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }, { url: "about:newtab" }] });
+  await settle();
+  const blank = t.sim.byUrl("about:newtab")[0];
+  const blankNode = t.nodeOf(blank.id);
+  const a = t.nodeByUrl("https://a.test/");
+  const before = t.sim.tabs.size;
+
+  await t.run("tab:openUrls", { urls: ["https://one.test/", "https://two.test/"], windowId: t.winId, parentId: blankNode, index: null, into: blankNode });
+  await settle(120);
+  assert.equal(t.sim.tabs.get(blank.id).url, "https://one.test/", "the empty tab itself took the first link");
+  assert.equal(t.sim.tabs.size, before + 1, "only the second link is a new tab");
+  const two = t.nodeByUrl("https://two.test/");
+  assert.equal(t.m.tree.get(two).parentId, blankNode, "the rest go in as its children");
+
+  await t.run("tab:openUrls", { urls: ["https://three.test/"], windowId: t.winId, parentId: a, index: null, into: a });
+  await settle(120);
+  assert.equal(t.sim.tabs.get(t.sim.byUrl("https://a.test/")[0].id).url, "https://a.test/", "a tab that shows a page is not replaced");
+  assert.equal(t.m.tree.get(t.nodeByUrl("https://three.test/")).parentId, a);
+});
+
+// ---- Ctrl+T when Firefox keeps calling the new tab about:blank ----
+
+async function blankTab(t, props = {}) {
+  const tab = await t.browser.tabs.create({ windowId: t.winId, url: "about:blank", ...props });
+  await settle();
+  return tab;
+}
+
+test("Ctrl+T: a tab that stays about:blank (new-tab page set to “blank page”) still gets the panel's container", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const work = await t.run("containers:create", { name: "Work" });
+  await t.run("panel:update", { id: t.panelId, defaultContainer: work });
+  const tab = await blankTab(t);
+  await settle(1500);
+  const blanks = [...t.sim.tabs.values()].filter((x) => /^about:/.test(x.url) && x.cookieStoreId === work);
+  assert.equal(blanks.length, 1, "swapped once, not duplicated");
+  assert.ok(!t.sim.tabs.has(tab.id));
+});
+
+test("Ctrl+T in a folder: the folder's container, from a tab that stays blank", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const work = await t.run("containers:create", { name: "Work" });
+  const f = await t.run("folder:create", { name: "F", panelId: t.panelId });
+  await t.run("folder:setContainer", { id: f, defaultContainer: work });
+  await t.run("folder:enter", { windowId: t.winId, id: f });
+  await settle(100);
+  await blankTab(t);
+  await settle(1500);
+  const swapped = [...t.sim.tabs.values()].find((x) => /^about:/.test(x.url) && x.cookieStoreId === work);
+  assert.ok(swapped, "opened in the folder's container");
+  assert.equal(t.m.tree.get(t.nodeOf(swapped.id)).parentId, f);
+});
+
+test("a blank tab that is not yours (has an opener, is in the background, or is still loading) is left alone", async () => {
+  const t = await boot({ seed: [{ url: "https://a.test/", active: true }] });
+  const work = await t.run("containers:create", { name: "Work" });
+  await t.run("panel:update", { id: t.panelId, defaultContainer: work });
+  const opener = t.sim.byUrl("https://a.test/")[0];
+  const withOpener = await blankTab(t, { openerTabId: opener.id });
+  const background = await blankTab(t, { active: false });
+  const loading = await blankTab(t);
+  t.sim.tabs.get(loading.id).status = "loading";
+  // the first of these had the focus until the next one opened: make the last the one under test
+  await settle(3300);
+  for (const tab of [withOpener, background, loading]) assert.ok(t.sim.tabs.has(tab.id), `tab ${tab.id} kept`);
+  const logged = JSON.stringify(await t.run("diag:list"));
+  assert.match(logged, /blank tab stayed blank and was left alone/);
+});

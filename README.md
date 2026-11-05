@@ -224,6 +224,15 @@ folder, which no extension can delete); searching looks in all of them.
 - **Backups**: a JSON export (and so the automatic backups) carries the bookmarks too: all of them, or none (Settings → bookmarks).
   Importing adds the ones you are missing and never removes or replaces any, so importing twice changes nothing. A panel-only export has no bookmarks.
 
+**A panel's own bookmarks.** A panel can be linked to one real bookmark folder and show it in a section **above its tabs** (right-click the panel → *Show bookmarks*,
+which makes *Other Bookmarks › Grove › <panel name>* the first time, or *Bookmarks folder…* to use any folder you already have; Settings → Panels has the same).
+It is an ordinary Firefox folder: Sync, the Library and the address bar see it, and the manager above edits it. The section has a header that folds it away (and remembers
+that), a count, and a button for a new subfolder; it is a separate box, not part of the tab tree, so it never takes part in tab placement, hiding or the vim keys.
+A click opens the page **in this panel**, or switches to a tab of **this panel** that already shows it (a page open in another panel does not count). Drag a tab, or a branch, onto the section
+(or onto its header, also while it is folded) to bookmark it there; drag a link from a page to add it; select several, rename, move and delete work as in the manager. If the folder is
+deleted in Firefox, the panel forgets it. Private panels have none. An export carries the folder as its place (*Other › Grove › Work*), not an id, and an import links the panels it creates
+to it again (making the folder if the file's bookmarks did not hold it).
+
 **After a close, or an unload.** Firefox decides which tab to show when the one you are looking at closes, and it can pick a tab that is not loaded (showing it loads it).
 Firefox lets an extension name that tab (`tabs.update`, `successorTabId`), so Grove keeps one named on the tab you are looking at: the one you showed just before it, else
 the one before that, and so on, **never a tab that is not loaded unless nothing else is** (then the most recent of them, since something must be shown), never a tab of another
@@ -254,7 +263,11 @@ Patterns: `example.com`, `=example.com`, `*.example.com`, `example.com/work`
 including tabs already in a container, except tabs you reopened in a container
 yourself ("Reopen in container…"). A panel's default container is where tabs
 opened in that panel start: tabs Grove opens (the + button, dropped links, searches) go
-straight into it, and a new tab you open yourself (Ctrl+T) is swapped for an empty one in it.
+straight into it, and a new tab you open yourself (Ctrl+T) is swapped for an empty one in it. Firefox does not always
+say what a new tab shows (with the new-tab page set to "blank page" it stays about:blank), so a
+tab that is still empty after a second, has finished loading, has no opener and is the one you
+are looking at counts as a Ctrl+T tab too. (Typing into its address bar in that first second can
+lose what you typed; the Diagnostics log says what happened to each blank tab.)
 A tab that already shows a page, or is loading a link, is not moved by it; a rule for its
 address still is. A folder can have a default container too, and its own site rules: right-click the
 folder → "Containers for this folder…" sets both (the default for new tabs, and a list of

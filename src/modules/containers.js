@@ -246,7 +246,12 @@ export default {
       watching.delete(tabId);
     };
 
-    async function check(tabId, nodeId, fallbackTab) {
+    // `late` is the look after the tab has had over a second to show anything: a tab that
+    // STILL shows nothing (Firefox reports a new-tab page as about:blank when it is set to
+    // "blank page", and some set-ups never report the real address) and that has finished
+    // loading, has no opener and is the one you are looking at, is a tab you opened yourself
+    // to type in. A link or an external app's address would be loading, or have an opener.
+    async function check(tabId, nodeId, fallbackTab, { late = false, last = false } = {}) {
       if (!watching.has(tabId)) return;
       const tab = await api.tabs.get(tabId).catch(() => null);
       if (!tab) return stopWatching(tabId);
@@ -257,6 +262,15 @@ export default {
       } else if (!EMPTY.test(url)) {
         stopWatching(tabId); // a page: not ours to swap
         diagnostics.log("route", { url, action: "skip", reason: "blank tab became a page, not the new-tab page: left alone" });
+      } else if (late) {
+        const yours = tab.status !== "loading" && tab.openerTabId == null && tab.active;
+        if (yours) {
+          stopWatching(tabId);
+          await swapNewTab(tab, nodeId);
+        } else if (last) {
+          stopWatching(tabId);
+          diagnostics.log("route", { url: url || "(no address)", action: "skip", reason: `blank tab stayed blank and was left alone (status ${tab.status ?? "?"}, ${tab.openerTabId != null ? "has an opener" : "no opener"}, ${tab.active ? "active" : "in the background"})` });
+        }
       }
     }
 
@@ -268,7 +282,7 @@ export default {
         diagnostics.log("route", { url: url || "(no address)", action: "watch", reason: "tab opened blank: waiting to see whether it becomes the new-tab page" });
         stopWatching(tab.id);
         watching.set(tab.id, [150, 500, 1200, 3000].map((ms) => {
-          const t = setTimeout(() => check(tab.id, nodeId), ms);
+          const t = setTimeout(() => check(tab.id, nodeId, undefined, { late: ms >= 1200, last: ms === 3000 }), ms);
           t.unref?.();
           return t;
         }));
