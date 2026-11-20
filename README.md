@@ -175,7 +175,7 @@ A page can make something clickable with a listener, which no extension can see;
 Not offered: `F` and multi-link modes: Shift on the last letter is the one gesture for "in a new tab".
 
 Next/previous follow the order of the sidebar, wrap around, step over what is folded away, and stay in the open
-panel (or folder). The settings say whether tabs that are not loaded count (they load when you arrive), and list
+panel (or folder). They skip tabs that are not loaded unless the setting says they count (then they load when you arrive), and the settings list
 sites where the keys stay out of the way (same patterns as container rules: `github.com`, `*.example.com`,
 `example.com/docs`, `=example.com`, `/regex/`; `#` starts a comment). The exceptions apply to pages, not to the sidebar.
 
@@ -235,7 +235,9 @@ to it again (making the folder if the file's bookmarks did not hold it).
 
 **After a close, or an unload.** Firefox decides which tab to show when the one you are looking at closes, and it can pick a tab that is not loaded (showing it loads it).
 Firefox lets an extension name that tab (`tabs.update`, `successorTabId`), so Grove keeps one named on the tab you are looking at: the one you showed just before it, else
-the one before that, and so on, **never a tab that is not loaded unless nothing else is** (then the most recent of them, since something must be shown), never a tab of another
+the one before that, and so on. A tab you opened behind the current one (a double-click, a middle-click) and have not shown yet counts as the one you used last. **Empty tabs
+(a blank page, the new-tab page, or the page of an add-on that replaces it) and tabs that are not loaded are the last resort**: a tab with a page and loaded first, then an unloaded one with a page,
+then an empty one (the most recent of each, since something must be shown). Never a tab of another
 panel or folder (those are hidden), never one in another window. Because it is set in advance, it holds however the tab is closed (Ctrl+W, the sidebar, `x`), and the
 unloaded tabs are skipped without being loaded. The order is the order you showed tabs since Grove started (Firefox's own `lastAccessed` orders tabs from before a restart).
 It looks again whenever something that changes the answer happens: you switch tabs, a tab is unloaded, loaded, closed, hidden or shown. Settings → tabs turns it off.
@@ -246,7 +248,13 @@ selected (including the one you are on) it goes to a tab that is not among them;
 Unloaded tabs and bookmarks are different things: an unloaded tab is still a tab (Firefox keeps its entry, its history and its place in the strip), a bookmark
 is just a row of text. A bookmark folder opened as saved tabs sits in between: Grove's own rows, no Firefox tab, until you click.
 
-Limit: Grove shows favicons only for sites that are open in a tab (it does not fetch icons from the network); the others get a letter tile.
+**Icons in the bookmark list.** Firefox gives extensions no bookmark icons, so Grove uses the icon of any open tab on the same site, then the ones it remembers (the last good icon of every site seen in a tab).
+A site is a host **and port**, so `localhost:3000` and `localhost:5173` are different apps with their own icon and their own letter tile; the row shows the port too. For sites Grove has never
+seen, it looks the icon up in the background when the list loads: the bookmarked page is fetched without cookies, the `<link rel="icon">` it names is read (else `/favicon.ico`) and
+checked, a few sites at a time. A site that has none is not asked again for three days. Settings → favicons turns the lookup off (nothing is then fetched); the rest gets a letter tile.
+
+**Where you are in the bookmark list.** A dot marks bookmarks that are open in some tab; a bar at the left edge and a heavier title mark the one the tab you are looking at is on (a folded
+folder that holds it is coloured). The blue outline marks the one you used last: it follows a click, a double-click, a middle-click, a right-click, a drag (wherever it ends up) and a link dropped in.
 
 ### Container rules
 

@@ -177,3 +177,44 @@ test("tabs:unload of every tab leaves the one you are on (nowhere to go)", async
   assert.equal(t.active().url, U("a"));
   assert.equal(t.tab("a").discarded, false);
 });
+
+// ---- empty tabs, tabs opened behind ----
+
+test("pickSuccessor: an empty tab is the last resort, after unloaded tabs with a page", () => {
+  const tabs = [tab(1, { url: U("a") }), tab(2, { url: "about:newtab" }), tab(3, { url: U("c"), discarded: true }), tab(4, { url: U("d") })];
+  const seen = new Map([[1, 1], [2, 9], [3, 5]]);
+  assert.equal(pickSuccessor(tabs, 4, { seen }).id, 1, "loaded with a page beats the more recent empty tab and the unloaded one");
+  assert.equal(pickSuccessor(tabs, 4, { seen, exclude: [1] }).id, 3, "an unloaded page beats an empty tab");
+  assert.equal(pickSuccessor(tabs, 4, { seen, exclude: [1, 3] }).id, 2, "only the empty one is left: it is used");
+  assert.equal(pickSuccessor([tab(5, { url: "" }), tab(6, { url: "about:blank" })], 5).id, 6);
+  assert.equal(pickSuccessor(tabs, 4, { seen, empty: (t) => t.id === 1 }).id, 2, "what counts as empty can be told");
+});
+
+test("closing: an empty tab is passed over, a tab opened behind and not yet shown counts as the one used last", async () => {
+  const t = await setup(["a", "b", "c"]);
+  await t.visit("b", "c"); // a, b shown before c
+  await t.browser.tabs.create({ url: U("e"), active: false, windowId: t.winId });
+  await wait(LOOK);
+  await t.browser.tabs.create({ windowId: t.winId, active: false }); // an empty tab opened behind, most recent of all
+  await wait(LOOK);
+  await t.closeActive(); // c
+  assert.equal(t.active().url, U("e"), "the one opened behind last, not the empty tab, not b");
+});
+
+test("closing: the new-tab page of another add-on is learned, then counts as empty", async () => {
+  const t = await setup(["a", "b"]);
+  await t.visit("b");
+  const page = "moz-extension://0000-aaaa/index.html";
+  const blank = await t.browser.tabs.create({ windowId: t.winId, active: true });
+  await wait(LOOK);
+  await t.sim.navigate(blank.id, page); // blank at first, then the add-on's page
+  await wait(LOOK);
+  await t.browser.tabs.update(t.tab("a").id, { active: true });
+  await wait(LOOK);
+  await t.browser.tabs.update(blank.id, { active: true });
+  await wait(LOOK);
+  await t.browser.tabs.update(t.tab("b").id, { active: true });
+  await wait(LOOK);
+  await t.closeActive(); // b: not the add-on's empty page although it was shown just before
+  assert.equal(t.active().url, U("a"));
+});

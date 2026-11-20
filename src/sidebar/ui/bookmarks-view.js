@@ -20,7 +20,7 @@ import { icon, twistyIcon } from "./icons.js";
 import { askText, askConfirm } from "./dialog.js";
 import { pickBookmarkFolder } from "./bookmark-picker.js";
 import { favicon } from "./tree-view.js";
-import { filterTree, hostOf, samePage } from "../../lib/bookmarks.js";
+import { filterTree, hostOf, siteOf, samePage } from "../../lib/bookmarks.js";
 import { highlight } from "../../lib/search.js";
 import { isExternal, readLinks } from "./external-drop.js";
 
@@ -105,17 +105,62 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     return { items, filter: filter?.keep ? filter : null };
   }
 
-  // Favicons Grove already has for the sites of open tabs; and which pages are open right now.
+  // Favicons Grove already has (the sites of open tabs first, then what it remembers and looked up); which pages
+  // are open right now; and which one the tab you are looking at is on.
+  let known = {}; // site -> icon, from favicons:lookup
   function knowledge() {
-    const icons = new Map();
+    const st = getState();
+    const icons = new Map(Object.entries(known));
     const live = [];
-    for (const n of Object.values(getState()?.nodes ?? {})) {
+    for (const n of Object.values(st?.nodes ?? {})) {
       if (n.type !== "tab" || !n.url) continue;
-      const host = hostOf(n.url);
-      if (n.favIconUrl && host && !icons.has(host)) icons.set(host, n.favIconUrl);
+      const site = siteOf(n.url);
+      if (n.favIconUrl && site) icons.set(site, n.favIconUrl);
       if (n.tabId != null) live.push(n.url);
     }
-    return { icons, live };
+    const here = st?.nodes?.[st?.activeNodes?.[getWindowId()]]?.url ?? null;
+    return { icons, live, here };
+  }
+
+  // The addresses of the bookmarks whose site has no icon yet, the folder you are looking at first.
+  function bareUrls() {
+    const mine = scopeRoot();
+    const seenSites = new Set();
+    const out = [];
+    const walk = (n) => {
+      if (n.type === "folder") return (n.children ?? []).forEach(walk);
+      const site = n.url && siteOf(n.url);
+      if (site && !known[site] && !seenSites.has(site)) { seenSites.add(site); out.push(n.url); }
+    };
+    for (const r of [mine, ...(data?.roots ?? [])]) if (r) walk(r);
+    return out;
+  }
+
+  // Learn the icons that are remembered, then ask for the rest to be looked up in the background, a batch at a time.
+  let filling = false;
+  async function refreshIcons(rounds = 4) {
+    if (!data) return;
+    const urls = [];
+    const collect = (n) => (n.type === "folder" ? (n.children ?? []).forEach(collect) : n.url && urls.push(n.url));
+    (data.roots ?? []).forEach(collect);
+    try {
+      const got = await cmd("favicons:lookup", { urls });
+      if (JSON.stringify(got) !== JSON.stringify(known)) { known = got; if (open) render(); }
+    } catch { return; }
+    if (filling) return;
+    filling = true;
+    try {
+      for (let i = 0; i < rounds && open; i++) {
+        const todo = bareUrls();
+        if (!todo.length) break;
+        const r = await cmd("favicons:fill", { urls: todo });
+        if (!r?.tried) break;
+        known = await cmd("favicons:lookup", { urls });
+        if (open) render();
+      }
+    } catch { /* the lookup is a nicety: never a message */ } finally {
+      filling = false;
+    }
   }
 
   function flatten(items, filter, depth, parent, out) {
@@ -166,7 +211,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     order = rows.map((r) => r.node.id);
     for (const id of [...selected]) if (!index.has(id)) selected.delete(id); // gone, or no longer on screen
     if (anchor && !index.has(anchor)) anchor = null;
-    const { icons, live } = knowledge();
+    const { icons, live, here } = knowledge();
     const terms = filter?.terms ?? [];
     status.textContent = !filter ? "" : rows.length ? `${rows.filter((r) => r.node.type !== "folder").length} found` : "No matches";
     status.classList.toggle("none", !!filter && !rows.length);
@@ -186,7 +231,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
         "Empty. Right-click a tab, a branch or a folder in the tab list and choose Bookmark (a branch keeps its shape as a folder), drag a link here, or press the folder button."));
       return;
     }
-    list.replaceChildren(...rows.map(({ node, depth }) => row(node, depth, icons, live, terms)));
+    list.replaceChildren(...rows.map(({ node, depth }) => row(node, depth, icons, live, terms, here)));
     list.scrollTop = kept;
     if (reveal) list.querySelector(".cursor")?.scrollIntoView({ block: "nearest" });
     paintSelection();
@@ -229,8 +274,10 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     markCursor();
   }
   function markCursor() {
-    list.querySelectorAll(".mrow").forEach((el) => el.classList.toggle("cursor", el.dataset.id === cursor));
-    list.querySelectorAll(".mrow").forEach((el) => el.classList.toggle("hit-current", el.dataset.id === cursor));
+    list.querySelectorAll(".mrow").forEach((el) => {
+      el.classList.toggle("cursor", el.dataset.id === cursor);
+      el.classList.toggle("hit-current", el.dataset.id === cursor);
+    });
     list.querySelector(".cursor")?.scrollIntoView({ block: "nearest" });
   }
 
@@ -245,23 +292,25 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   }
   const leavesOf = (node) => (node.type === "folder" ? (node.children ?? []).flatMap(leavesOf) : node.url ? [node] : []);
 
-  function row({ id, title, url, type, children }, depth, icons, live, terms) {
+  function row({ id, title, url, type, children }, depth, icons, live, terms, here) {
     const folder = type === "folder";
     const isOpen = folder && (terms.length || expanded.has(id));
     const label = title || (folder ? "Untitled folder" : url);
+    const onThisPage = !folder && !!here && samePage(here, url); // the tab you are looking at is this bookmark
+    const hidesIt = folder && !!here && !isOpen && leavesOf({ type, children }).some((n) => samePage(here, n.url)); // ... inside this folded folder
     const el = h("div", {
-      class: `row mrow${folder ? " is-folder" : ""}${id === cursor ? " cursor hit-current" : ""}${!folder && live.some((u) => samePage(u, url)) ? " is-open" : ""}`,
-      role: "treeitem", "aria-level": String(depth + 1), "aria-expanded": folder ? String(!!isOpen) : null,
+      class: `row mrow${folder ? " is-folder" : ""}${id === cursor ? " cursor hit-current" : ""}${!folder && live.some((u) => samePage(u, url)) ? " is-open" : ""}${onThisPage ? " is-here" : ""}${hidesIt ? " has-here" : ""}`,
+      role: "treeitem", "aria-current": onThisPage ? "page" : null, "aria-level": String(depth + 1), "aria-expanded": folder ? String(!!isOpen) : null,
       draggable: "true", dataset: { id }, title: folder ? label : `${label}\n${url}`,
       style: { paddingLeft: `${4 + depth * 14}px` },
     });
     const twisty = h("span", { class: `twisty${folder ? " has" : ""}${isOpen ? " open" : ""}` }, folder ? twistyIcon() : null);
-    const mark = folder ? icon("folder", { cls: "folder-icon" }) : favicon({ url, favIconUrl: icons.get(hostOf(url)) });
+    const mark = folder ? icon("folder", { cls: "folder-icon" }) : favicon({ url, favIconUrl: icons.get(siteOf(url)) });
     const text = h("span", { class: "title" });
     text.append(...(terms.length ? highlight(label, terms).map((p) => (p.hit ? h("mark", {}, p.text) : p.text)) : [label]));
     el.append(twisty, mark, text);
     if (folder) el.append(h("span", { class: "where" }, String(countLeaves(children))));
-    else el.append(h("span", { class: "where" }, hostOf(url)));
+    else el.append(h("span", { class: "where" }, siteOf(url) || hostOf(url)));
     if (!folder) el.append(h("span", { class: "live-dot", title: "Open in a tab now", "aria-hidden": "true" }));
     return el;
   }
@@ -282,7 +331,7 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     } finally {
       loading = false;
     }
-    if (open) render();
+    if (open) { render(); refreshIcons(); }
     if (again) { again = false; load(); }
   }
 
@@ -442,10 +491,15 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
   });
   // A click on empty space drops the selection.
   list.addEventListener("click", (e) => { if (!rowOf(e)) clearSelection(); });
+  // A double-click is two clicks (it opens the page, as one does); this only makes sure the row stays the one in use.
+  list.addEventListener("dblclick", (e) => {
+    const id = rowOf(e)?.dataset.id;
+    if (id && cursor !== id) { cursor = id; markCursor(); }
+  });
   list.addEventListener("auxclick", (e) => {
     const r = rowOf(e);
     const node = r && nodeOf(r.dataset.id);
-    if (e.button === 1 && node && node.type !== "folder") { e.preventDefault(); openNode(node, "background"); }
+    if (e.button === 1 && node && node.type !== "folder") { e.preventDefault(); cursor = node.id; markCursor(); openNode(node, "background"); }
   });
   list.addEventListener("contextmenu", (e) => {
     const r = rowOf(e);
@@ -482,6 +536,9 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const r = rowOf(e);
     if (!r) return;
     dragging = r.dataset.id;
+    // The row you picked up is the one you last used, wherever it ends up (another page, the tab list, here).
+    cursor = dragging;
+    markCursor();
     // Dragging one of several selected rows carries them all.
     dragIds = selected.size > 1 && selected.has(dragging) ? chosen().map((n) => n.id) : [dragging];
     const node = nodeOf(dragging);
@@ -555,7 +612,8 @@ export function createBookmarksView({ root, getState, getWindowId, showMenu, onT
     const { links } = readLinks(e.dataTransfer);
     let at = spot.at;
     for (const l of links) {
-      await run("bookmarks:create", { parentId: spot.parentId, title: l.title || hostOf(l.url) || l.url, url: l.url, ...(at != null ? { index: at++ } : {}) });
+      const made = await run("bookmarks:create", { parentId: spot.parentId, title: l.title || hostOf(l.url) || l.url, url: l.url, ...(at != null ? { index: at++ } : {}) });
+      if (made) cursor = made; // the one just dropped in is the one last used
     }
     if (links.length) toast(`${links.length} bookmark${links.length === 1 ? "" : "s"} added`);
   }

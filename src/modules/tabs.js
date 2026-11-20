@@ -27,7 +27,7 @@
 
 import { uid } from "../lib/util.js";
 import * as T from "../lib/tree.js";
-import { pickSuccessor } from "../lib/succession.js";
+import { pickSuccessor, isBlankUrl } from "../lib/succession.js";
 
 const NODE_KEY = "grove:node";
 const LATE_EVIDENCE_MS = 3000;
@@ -408,6 +408,11 @@ export default {
           (c.cookieStoreId == null || c.cookieStoreId === tab.cookieStoreId)
       );
       const claim = ci >= 0 ? claims.splice(ci, 1)[0] : undefined;
+      if (isBlankUrl(tab.url)) startedBlank.add(tab.id);
+      // A tab opened behind the one you are on (a double-click, a middle-click) has not been shown yet, but you
+      // did just open it: it counts as the last one used, like one you had been in. Not a tab session restore
+      // brings back (its lastAccessed is from before).
+      else if (!tab.active && !tab.discarded && !(tab.lastAccessed > 1e12 && Date.now() - tab.lastAccessed > 30_000)) { seen.set(tab.id, ++visits); scheduleSuccessor(tab.windowId); }
       const work = ingest(tab, { claim }).then(async (nodeId) => {
         pending.delete(tab.id);
         wake(tab.id);
@@ -439,7 +444,8 @@ export default {
 
     const onUpdated = async (tabId, changeInfo, tab) => {
       await pending.get(tabId);
-      if ("discarded" in changeInfo || "hidden" in changeInfo) scheduleSuccessor(tab?.windowId);
+      if (tab) learnNewTabPage(tab, changeInfo);
+      if ("discarded" in changeInfo || "hidden" in changeInfo || "url" in changeInfo) scheduleSuccessor(tab?.windowId);
       const nodeId = nodeByTab.get(tabId);
       if (!nodeId) return;
       const keys = ["url", "title", "favIconUrl", "pinned", "status", "discarded", "audible", "mutedInfo", "splitViewId"];
@@ -453,6 +459,7 @@ export default {
     const onRemoved = async (tabId, { isWindowClosing, windowId } = {}) => {
       await pending.get(tabId);
       seen.delete(tabId);
+      startedBlank.delete(tabId);
       given.delete(tabId);
       if (!isWindowClosing) scheduleSuccessor(windowId);
       lastActive.forEach((v, k) => v === tabId && lastActive.delete(k));
@@ -535,13 +542,30 @@ export default {
 
     const windowTabs = (windowId) => api.tabs.query({ windowId }).catch(() => []);
 
+    // A tab with nothing in it is not somewhere to go back to. Blank pages and the new-tab page are
+    // recognised by address; when another add-on provides the new-tab page, its address is learned
+    // the first time a tab you opened yourself (blank, no opener) turns into it, and kept.
+    store.defaults("newTabPages", []);
+    const startedBlank = new Set(); // tab ids created blank
+    const pageKey = (url) => String(url ?? "").split(/[?#]/)[0];
+    const isOtherAddon = (url) => /^moz-extension:\/\//i.test(url) && !String(url).startsWith(api.runtime?.getURL?.("") ?? "\0");
+    const isEmptyTab = (t) => isBlankUrl(t.url) || (typeof t.url === "string" && store.get("newTabPages").includes(pageKey(t.url)));
+    function learnNewTabPage(tab, changeInfo) {
+      if (!startedBlank.has(tab.id) || typeof changeInfo.url !== "string" || isBlankUrl(changeInfo.url)) return;
+      startedBlank.delete(tab.id);
+      if (tab.openerTabId != null || !isOtherAddon(changeInfo.url)) return;
+      const known = store.get("newTabPages");
+      const key = pageKey(changeInfo.url);
+      if (!known.includes(key)) store.set("newTabPages", [...known, key].slice(-8), { silent: true });
+    }
+
     async function refreshSuccessor(windowId) {
       const list = await windowTabs(windowId);
       const here = list.find((t) => t.active);
       if (!here) return;
       const had = noSuccessor(here.successorTabId) ? NO_TAB : here.successorTabId;
       let want = NO_TAB;
-      if (settings.get("tabs", "closeToRecent")) want = pickSuccessor(list, here.id, { seen })?.id ?? NO_TAB;
+      if (settings.get("tabs", "closeToRecent")) want = pickSuccessor(list, here.id, { seen, empty: isEmptyTab })?.id ?? NO_TAB;
       else if (given.get(here.id) !== had) return; // off: only undo what we set ourselves
       if (want === had) return;
       try {
@@ -793,7 +817,7 @@ export default {
       let skipped = 0;
       for (const { id, tab } of found) {
         if (tab.active) {
-          const next = pickSuccessor(await windowTabs(tab.windowId), tab.id, { seen, exclude });
+          const next = pickSuccessor(await windowTabs(tab.windowId), tab.id, { seen, exclude, empty: isEmptyTab });
           if (!next) {
             skipped++;
             continue;

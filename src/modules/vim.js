@@ -25,7 +25,7 @@ export default {
   name: "vim",
   deps: ["tree", "windows", "tabs", "settings", "diagnostics"],
 
-  setup({ api, bus, commands, log, modules }) {
+  setup({ api, bus, commands, store, log, modules }) {
     const { tree, windows, tabs, settings, diagnostics } = modules;
 
     settings.register("vim", {
@@ -57,7 +57,7 @@ export default {
       includeUnloaded: {
         type: "boolean",
         label: "Next and previous tab also stop on tabs that are not loaded (loading them when you arrive)",
-        default: true,
+        default: false,
       },
       exceptions: {
         type: "lines",
@@ -67,6 +67,14 @@ export default {
     });
 
     const get = (k) => settings.get("vim", k);
+
+    // Skipping unloaded tabs became the default (0.19). Settings keep the value they had, which for everyone
+    // so far is the old default, so it is switched once; after that the setting is yours.
+    store.defaults("migrated", {});
+    if (!store.get("migrated").skipUnloaded) {
+      store.update("settings", (all) => { if (all.vim) all.vim.includeUnloaded = false; }, { silent: true });
+      store.update("migrated", (m) => { m.skipUnloaded = true; }, { silent: true });
+    }
 
     // ---- which pages -----------------------------------------------------
 

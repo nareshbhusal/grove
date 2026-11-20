@@ -122,6 +122,11 @@ function safeDecode(s) {
   try { return decodeURIComponent(s ?? ""); } catch { return s ?? ""; }
 }
 
+// host and port: what tells local apps on different ports apart (hostOf, below, is for matching names)
+export const siteOf = (url) => {
+  try { const u = new URL(url); return /^https?:$/.test(u.protocol) ? u.host.replace(/^www\./, "") : ""; } catch { return ""; }
+};
+
 export const hostOf = (url) => {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 };

@@ -27,6 +27,15 @@ export function viewOf(state, windowId) {
   return { panelId: state?.activePanels?.[windowId] ?? state?.panels?.[0]?.id ?? null, folderId: null };
 }
 
+function siteOf(url) {
+  try {
+    const u = new URL(url);
+    return /^https?:$/.test(u.protocol) ? u.host.replace(/^www\./, "") : "";
+  } catch {
+    return "";
+  }
+}
+
 function hostOf(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -41,7 +50,7 @@ function tile(url) {
   const host = hostOf(url);
   const letter = host ? host[0].toUpperCase() : "";
   let hash = 0;
-  for (const c of host) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+  for (const c of siteOf(url) || host) hash = (hash * 31 + c.charCodeAt(0)) >>> 0; // with the port: local apps differ
   const el = h("span", { class: `favicon tile${host ? "" : " blank"}` }, letter);
   if (host) el.style.background = `hsl(${hash % 360} 42% 42%)`;
   return el;

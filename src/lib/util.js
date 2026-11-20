@@ -21,6 +21,17 @@ export function hostOf(url) {
   }
 }
 
+// The site of an address as icons and "where" labels see it: host and port, without a leading www.
+// Different local apps (localhost:3000, localhost:5173) are different sites.
+export function siteOf(url) {
+  try {
+    const u = new URL(url);
+    return /^https?:$/.test(u.protocol) ? u.host.replace(/^www\./, "") : "";
+  } catch {
+    return "";
+  }
+}
+
 export function isInternalUrl(url) {
   return !url || /^(about|moz-extension|chrome|resource|view-source):/i.test(url);
 }

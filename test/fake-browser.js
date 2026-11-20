@@ -467,11 +467,11 @@ export function createFakeBrowser({ storageData = {} } = {}) {
     },
 
     // Simulate tabs that exist before the extension starts.
-    seedTab({ windowId, url, title, active = false, cookieStoreId = "firefox-default", pinned = false, discarded = false }) {
+    seedTab({ windowId, url, title, active = false, cookieStoreId = "firefox-default", pinned = false, discarded = false, favIconUrl }) {
       const tab = {
         id: nextTab++, windowId, index: inWin(windowId).length, url, title: title ?? url, active, pinned,
         hidden: false, discarded, audible: false, status: "complete", cookieStoreId, incognito: !!wins.get(windowId)?.incognito,
-        width: 1200, height: 800,
+        width: 1200, height: 800, ...(favIconUrl ? { favIconUrl } : {}),
         mutedInfo: { muted: false }, successorTabId: -1, lastAccessed: ++accessTick,
       };
       tabs.set(tab.id, tab);

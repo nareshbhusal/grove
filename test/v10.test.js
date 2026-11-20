@@ -76,12 +76,11 @@ test("unloaded tabs are included or skipped by the setting", async () => {
   const t = await setup();
   await t.sim.discardTab(t.tab("b").id);
   await t.key("a", "next");
-  assert.equal(active(t).url, U("b"), "included by default");
+  assert.equal(active(t).url, U("c"), "skipped by default");
   await t.browser.tabs.update(t.tab("a").id, { active: true });
-  await t.sim.discardTab(t.tab("b").id); // showing it loaded it; unload it again
-  await t.run("settings:set", { module: "vim", key: "includeUnloaded", value: false });
+  await t.run("settings:set", { module: "vim", key: "includeUnloaded", value: true });
   await t.key("a", "next");
-  assert.equal(active(t).url, U("c"), "skipped when asked");
+  assert.equal(active(t).url, U("b"), "included when asked");
 });
 
 test("from the sidebar the active tab of the window is the starting point", async () => {
@@ -385,4 +384,11 @@ test("scrolling amounts: a little, half a screen, the ends", () => {
   scrollElement(el, "pageDown", win);
   scrollElement(el, "top", win);
   assert.deepEqual(calls, [["by", 400, "auto"], ["to", 0, "auto"]]);
+});
+
+test("next/previous tab: an old stored 'include unloaded = true' is switched off once, then left alone", async () => {
+  const first = await boot({ seed: [{ url: U("a"), active: true }], storageData: { settings: { vim: { includeUnloaded: true } } } });
+  assert.equal(first.m.settings.get("vim", "includeUnloaded"), false, "the old default is replaced");
+  await first.run("settings:set", { module: "vim", key: "includeUnloaded", value: true });
+  assert.equal(first.m.settings.get("vim", "includeUnloaded"), true, "a choice made afterwards stands");
 });

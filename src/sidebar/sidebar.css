@@ -468,6 +468,10 @@ body.marks-open #tree, body.marks-open #peek, body.marks-open #splitter, body.ma
 .marks-list { flex: 1; overflow-y: auto; padding: 2px 4px 40px; outline: none; }
 .mrow .live-dot { display: none; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .mrow.is-open .live-dot { display: block; }
+/* the page of the tab you are looking at: a bar at the edge and a heavier title; a folded folder that holds it gets the colour */
+.mrow.is-here { box-shadow: inset 3px 0 0 var(--accent); }
+.mrow.is-here .title { font-weight: 600; }
+.mrow.has-here .title { color: var(--accent); }
 .marks-hint { flex: none; padding: 4px 8px; font-size: 11px; color: var(--fg-dim); border-top: 1px solid var(--line); }
 .marks-undo { position: absolute; left: 8px; right: 8px; bottom: 30px; display: flex; align-items: center; gap: 8px; justify-content: space-between;
   padding: 7px 10px; border-radius: 8px; background: var(--fg); color: var(--bg); box-shadow: 0 4px 14px #0004; }
